@@ -1,0 +1,439 @@
+Only in netperf-2.4.5: netperf-2.4.5
+diff -ru netperf-2.4.5-old/src/netlib.c netperf-2.4.5/src/netlib.c
+--- netperf-2.4.5-old/src/netlib.c	2009-05-27 18:27:34.000000000 -0400
++++ netperf-2.4.5/src/netlib.c	2011-01-30 16:01:31.000000000 -0500
+@@ -236,13 +236,18 @@
+ /* global variables to hold the value for processor affinity */
+ int     local_proc_affinity = -1,remote_proc_affinity = -1;
+ 
++int no_updates;
++int no_checkpointing;
++
+ /* these are to allow netperf to be run easily through those evil,
+    end-to-end breaking things known as firewalls */
+ char local_data_port[10];
+ char remote_data_port[10];
++char external_data_port[10];
+ 
+ char *local_data_address=NULL;
+ char *remote_data_address=NULL;
++char *external_data_address=NULL;
+ 
+ char *local_sysname, *remote_sysname;
+ char *local_release, *remote_release;
+diff -ru netperf-2.4.5-old/src/netlib.h netperf-2.4.5/src/netlib.h
+--- netperf-2.4.5-old/src/netlib.h	2008-10-30 16:48:46.000000000 -0400
++++ netperf-2.4.5/src/netlib.h	2011-01-30 16:01:12.000000000 -0500
+@@ -441,13 +441,18 @@
+ 
+ extern  int   local_proc_affinity, remote_proc_affinity;
+ 
++extern int no_updates;
++extern int no_checkpointing;
++
+ /* these are to allow netperf to be run easily through those evil,
+    end-to-end breaking things known as firewalls */
+ extern char local_data_port[10];
+ extern char remote_data_port[10];
++extern char external_data_port[10];
+ 
+ extern char *local_data_address;
+ extern char *remote_data_address;
++extern char *external_data_address;
+ 
+ extern char *local_sysname, *remote_sysname;
+ extern char *local_release, *remote_release;
+Only in netperf-2.4.5-old/src: netperf_version.h
+diff -ru netperf-2.4.5-old/src/nettest_bsd.c netperf-2.4.5/src/nettest_bsd.c
+--- netperf-2.4.5-old/src/nettest_bsd.c	2009-06-03 20:31:15.000000000 -0400
++++ netperf-2.4.5/src/nettest_bsd.c	2011-01-30 16:03:54.000000000 -0500
+@@ -163,6 +163,16 @@
+ #include <sys/sendfile.h>
+ #endif /* HAVE_SENDFILE && (__linux || __sun) */
+ 
++
++#include <tcpr.h>
++
++struct update {
++	uint32_t peer_address;
++	uint32_t address;
++	struct tcpr_update tcpr;
++};
++
++
+ 
+ 
+ /* these variables are specific to the BSD sockets tests, but can
+@@ -416,8 +426,11 @@
+ \n\
+ TCP/UDP BSD Sockets Test Options:\n\
+     -b number         Send number requests at start of _RR tests\n\
++    -c                Turn off TCPR checkpointed acknowledgments\n\
+     -C                Set TCP_CORK when available\n\
+     -D [L][,R]        Set TCP_NODELAY locally and/or remotely (TCP_*)\n\
++    -e name           Use TCPR filter for external name\n\
++    -f port           Use TCPR filter at external name and port\n\
+     -h                Display this text\n\
+     -H name,fam       Use name (or IP) and family as target of data connection\n\
+     -L name,fam       Use name (or IP) and family as source of data connection\n\
+@@ -430,6 +443,7 @@
+     -r req,[rsp]      Set request/response sizes (TCP_RR, UDP_RR)\n\
+     -s send[,recv]    Set local socket send/recv buffer sizes\n\
+     -S send[,recv]    Set remote socket send/recv buffer sizes\n\
++    -u                Do not send TCPR acknowledgment updates \n\
+     -4                Use AF_INET (eg IPv4) on both ends of the data conn\n\
+     -6                Use AF_INET6 (eg IPv6) on both ends of the data conn\n\
+ \n\
+@@ -1349,6 +1363,53 @@
+ 
+ }
+ 
++static int create_update_socket(void)
++{
++	int ret;
++	int sock;
++	struct addrinfo *ai;
++	struct addrinfo hints;
++
++	if (!external_data_port[0])
++		return INVALID_SOCKET;
++
++	sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++	if (sock < 0) {
++		perror("Creating update socket");
++		exit(EXIT_FAILURE);
++	}
++
++	memset(&hints, 0, sizeof(hints));
++	hints.ai_family = AF_INET;
++	hints.ai_socktype = SOCK_DGRAM;
++	hints.ai_protocol = IPPROTO_UDP;
++
++	ret = getaddrinfo(local_data_address, local_data_port, &hints, &ai);
++	if (ret) {
++		fprintf(stderr, "Resolving internal address: %s\n",
++				gai_strerror(ret));
++		exit(EXIT_FAILURE);
++	}
++	if (bind(sock, ai->ai_addr, ai->ai_addrlen) < 0) {
++		perror("Binding update socket");
++		exit(EXIT_FAILURE);
++	}
++	freeaddrinfo(ai);
++
++	ret = getaddrinfo(external_data_address, external_data_port, &hints, &ai);
++	if (ret) {
++		fprintf(stderr, "Resolving external address: %s\n",
++				gai_strerror(ret));
++		exit(EXIT_FAILURE);
++	}
++	if (connect(sock, ai->ai_addr, ai->ai_addrlen) < 0) {
++		perror("Connecting update socket");
++		exit(EXIT_FAILURE);
++	}
++	freeaddrinfo(ai);
++	return sock;
++}
++
+ #ifdef KLUDGE_SOCKET_OPTIONS
+ 
+ 
+@@ -1589,6 +1650,8 @@
+   int len;
+   unsigned int nummessages = 0;
+   SOCKET send_socket;
++  SOCKET tcpr_socket;
++  struct update tcpr_update;
+   int bytes_remaining;
+   int tcp_mss = -1;  /* possibly uninitialized on printf far below */
+ 
+@@ -1811,6 +1874,8 @@
+     DEMO_STREAM_SETUP(lss_size,rsr_size)
+ #endif
+ 
++    tcpr_socket = create_update_socket();
++
+     /*Connect up to the remote port on the data socket  */
+     if (connect(send_socket, 
+ 		remote_res->ai_addr,
+@@ -1819,6 +1884,20 @@
+       exit(1);
+     }
+ 
++    if (tcpr_socket != INVALID_SOCKET) {
++      if (recv(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: send_tcp_stream: update socket recv failed");
++	exit(1);
++      }
++      if (no_checkpointing) {
++      	tcpr_update.tcpr.done_reading = 1;
++	if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	  perror("sending done_reading to turn off checkpointing");
++	  exit(1);
++	}
++      }
++    }
++
+ #ifdef WIN32
+   /* this is used so the timer thread can close the socket out from */
+   /* under us, which to date is the easiest/cleanest/least */
+@@ -1957,7 +2036,16 @@
+       tcp_mss = -1;
+       get_tcp_info(send_socket,&tcp_mss);
+     }
+-    
++
++    if (tcpr_socket != INVALID_SOCKET) {
++      tcpr_update.tcpr.done_reading = 1;
++      tcpr_update.tcpr.done_writing = 1;
++      if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: cannot tell TCPR about shutdown tcp stream socket");
++	exit(1);
++      }
++    }
++
+     if (shutdown(send_socket,SHUT_WR) == SOCKET_ERROR) {
+       perror("netperf: cannot shutdown tcp stream socket");
+       exit(1);
+@@ -1969,7 +2057,7 @@
+     /* any exit from the recv() call is good... raj 4/93 */
+     
+     recv(send_socket, send_ring->buffer_ptr, send_size, 0);
+-    
++
+     /* this call will always give us the elapsed time for the test, and */
+     /* will also store-away the necessaries for cpu utilization */
+     
+@@ -1983,6 +2071,18 @@
+ 
+     close(send_socket);
+ 
++    if (tcpr_socket != INVALID_SOCKET) {
++      if (recv(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: error reading TCPR close update");
++	exit(1);
++      }
++      if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: error writing TCPR close update");
++	exit(1);
++      }
++      close(tcpr_socket);
++    }
++
+     if (!no_control) {
+       /* Get the statistics from the remote end. The remote will have
+ 	 calculated service demand and all those interesting
+@@ -2297,6 +2397,8 @@
+   int len;
+   unsigned int nummessages = 0;
+   SOCKET recv_socket;
++  SOCKET tcpr_socket;
++  struct update tcpr_update;
+   int bytes_remaining;
+   int tcp_mss = -1;  /* possibly uninitialized on printf far below */
+ 
+@@ -2517,6 +2619,8 @@
+     DEMO_STREAM_SETUP(lsr_size,rss_size)
+ #endif
+ 
++    tcpr_socket = create_update_socket();
++
+     /*Connect up to the remote port on the data socket  */
+     if (connect(recv_socket, 
+ 		remote_res->ai_addr,
+@@ -2525,6 +2629,20 @@
+       exit(1);
+     }
+ 
++    if (tcpr_socket != INVALID_SOCKET) {
++      if (recv(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: send_tcp_stream: update socket recv failed");
++	exit(1);
++      }
++      if (no_checkpointing) {
++      	tcpr_update.tcpr.done_reading = 1;
++	if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	  perror("sending done_reading to turn off checkpointing");
++	  exit(1);
++	}
++      }
++    }
++
+ #ifdef WIN32
+   /* this is used so the timer thread can close the socket out from */
+   /* under us, which to date is the easiest/cleanest/least */
+@@ -2611,6 +2729,14 @@
+ 				    recv_size,
+ 				    0)) > 0 ) {
+ 
++      if (!no_updates && tcpr_socket != INVALID_SOCKET) {
++	tcpr_update.tcpr.ack = htonl(ntohl(tcpr_update.tcpr.ack) + len);
++	if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	  perror("netperf: cannot tell TCPR new ack");
++	  exit(1);
++	}
++      }
++
+ #ifdef WANT_HISTOGRAM
+       if (verbosity > 1) {
+ 	/* timestamp the exit from the recv call and update the histogram */
+@@ -2677,7 +2803,16 @@
+       tcp_mss = -1;
+       get_tcp_info(recv_socket,&tcp_mss);
+     }
+-    
++
++    if (tcpr_socket != INVALID_SOCKET) {
++      tcpr_update.tcpr.done_reading = 1;
++      tcpr_update.tcpr.done_writing = 1;
++      if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: cannot tell TCPR about shutdown tcp maerts socket");
++	exit(1);
++      }
++    }
++
+     if (shutdown(recv_socket,SHUT_WR) == SOCKET_ERROR) {
+       perror("netperf: cannot shutdown tcp maerts socket");
+       exit(1);
+@@ -2699,6 +2834,18 @@
+ 
+     close(recv_socket);
+ 
++    if (tcpr_socket != INVALID_SOCKET) {
++      if (recv(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: error reading TCPR close update");
++	exit(1);
++      }
++      if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: error writing TCPR close update");
++	exit(1);
++      }
++      close(tcpr_socket);
++    }
++
+     if (!no_control) {
+       /* Get the statistics from the remote end. The remote will have
+          calculated service demand and all those interesting
+@@ -5535,6 +5682,8 @@
+   char	*temp_message_ptr;
+   int	nummessages;
+   SOCKET	send_socket;
++  SOCKET	tcpr_socket;
++  struct update tcpr_update;
+   int	trans_remaining;
+   double	bytes_xferd;
+ 
+@@ -5769,6 +5918,8 @@
+     DEMO_RR_SETUP(1000)
+ #endif
+ 
++    tcpr_socket = create_update_socket();
++
+     /*Connect up to the remote port on the data socket  */
+     if (connect(send_socket, 
+ 		remote_res->ai_addr,
+@@ -5777,7 +5928,21 @@
+       
+       exit(1);
+     }
+-    
++
++    if (tcpr_socket != INVALID_SOCKET) {
++      if (recv(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: send_tcp_rr: update socket recv failed");
++	exit(1);
++      }
++      if (no_checkpointing) {
++      	tcpr_update.tcpr.done_reading = 1;
++	if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	  perror("sending done_reading to turn off checkpointing");
++	  exit(1);
++	}
++      }
++    }
++
+ #ifdef WIN32
+     /* this is used so the timer thread can close the socket out from */
+     /* under us, which to date is the easiest/cleanest/least */
+@@ -5921,6 +6086,13 @@
+ 	rsp_bytes_left -= rsp_bytes_recvd;
+ 	temp_message_ptr  += rsp_bytes_recvd;
+       }	
++      if (!no_updates && tcpr_socket != INVALID_SOCKET) {
++	tcpr_update.tcpr.ack = htonl(ntohl(tcpr_update.tcpr.ack) + rsp_size);
++	if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	  perror("netperf: cannot tell TCPR new ack");
++	  exit(1);
++	}
++      }
+       recv_ring = recv_ring->next;
+       
+ #ifdef WANT_FIRST_BURST
+@@ -6075,9 +6247,31 @@
+     
+     confidence_iteration++;
+ 
++    if (tcpr_socket != INVALID_SOCKET) {
++      tcpr_update.tcpr.done_reading = 1;
++      tcpr_update.tcpr.done_writing = 1;
++      if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: cannot tell TCPR about read shutdown");
++	exit(1);
++      }
++    }
++    shutdown(send_socket, SHUT_WR);
++
+     /* we are now done with the socket, so close it */
+     close(send_socket);
+ 
++    if (tcpr_socket != INVALID_SOCKET) {
++      if (recv(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: error reading TCPR close update");
++	exit(1);
++      }
++      if (send(tcpr_socket, &tcpr_update, sizeof(tcpr_update), 0) < 0) {
++	perror("netperf: error writing TCPR close update");
++	exit(1);
++      }
++      close(tcpr_socket);
++    }
++
+   }
+ 
+   retrieve_confident_values(&elapsed_time,
+@@ -12738,7 +12932,7 @@
+ 
+ {
+ 
+-#define SOCKETS_ARGS "b:CDnNhH:L:m:M:p:P:r:s:S:T:Vw:W:z46"
++#define SOCKETS_ARGS "b:ce:f:CDnNhH:L:m:M:p:P:r:s:S:T:uVw:W:z46"
+ 
+   extern char	*optarg;	  /* pointer to option string	*/
+   
+@@ -12785,6 +12979,16 @@
+       exit(-1);
+ #endif
+       break;
++    case 'c':
++      no_checkpointing = 1;
++      break;
++    case 'e':
++      external_data_address = malloc(strlen(optarg)+1);
++      strncpy(external_data_address,optarg,strlen(optarg));
++      break;
++    case 'f':
++      strncpy(external_data_port,optarg,sizeof(external_data_port));
++      break;
+     case 'h':
+       print_sockets_usage();
+       exit(1);
+@@ -12894,6 +13098,9 @@
+       /* set the test name */
+       strcpy(test_name,optarg);
+       break;
++    case 'u':
++      no_updates = 1;
++      break;
+     case 'W':
+       /* set the "width" of the user space data */
+       /* buffer. This will be the number of */
