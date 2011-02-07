@@ -1,0 +1,17 @@
+aclocal.m4
+autom4te.cache
+build-aux
+config.h
+config.h.in
+config.log
+config.status
+configure
+.deps
+Makefile
+Makefile.in
+*.o
+stamp-h1
+*.swp
+*.tar.*
+tcpr-application
+tcpr-netfilter
