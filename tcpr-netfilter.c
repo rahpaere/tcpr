@@ -112,24 +112,24 @@ static void log_state(struct state *s)
 						ntohs(s->tcpr.peer_port));
 	fprintf(state_log, "  Port:                %" PRIu16 "\n",
 						ntohs(s->tcpr.port));
-	if (s->tcpr.have_peer_ack)
+	if (s->tcpr.flags & TCPR_HAVE_PEER_ACK)
 		fprintf(state_log, "  Peer acknowledgment: %" PRIu32 "\n",
 						ntohl(s->tcpr.peer_ack));
 	else
 		fprintf(state_log, "  Peer acknowledgment: None.\n");
-	if (s->tcpr.have_peer_fin)
+	if (s->tcpr.flags & TCPR_HAVE_PEER_FIN)
 		fprintf(state_log, "  Peer final sequence: %" PRIu32 "\n",
 						ntohl(s->tcpr.peer_fin));
 	else
 		fprintf(state_log, "  Peer final sequence: None.\n");
 	fprintf(state_log, "  Peer window:         %" PRIu16 "\n",
 						ntohs(s->tcpr.peer_win));
-	if (s->tcpr.have_ack)
+	if (s->tcpr.flags & TCPR_HAVE_ACK)
 		fprintf(state_log, "  Acknowledgment:      %" PRIu32 "\n",
 						ntohl(s->tcpr.ack));
 	else
 		fprintf(state_log, "  Acknowledgment:      None.\n");
-	if (s->tcpr.have_fin)
+	if (s->tcpr.flags & TCPR_HAVE_FIN)
 		fprintf(state_log, "  Final sequence:      %" PRIu32 "\n",
 						ntohl(s->tcpr.fin));
 	else
@@ -140,9 +140,9 @@ static void log_state(struct state *s)
 						ntohs(s->tcpr.win));
 	fprintf(state_log, "  Delta:               %" PRIu32 "\n",
 						s->tcpr.delta);
-	if (s->tcpr.done_reading)
+	if (s->tcpr.flags & TCPR_DONE_READING)
 		fprintf(state_log, "  Done reading.\n");
-	if (s->tcpr.done_writing)
+	if (s->tcpr.flags & TCPR_DONE_WRITING)
 		fprintf(state_log, "  Done writing.\n");
 }
 

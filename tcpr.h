@@ -6,6 +6,16 @@
 #include <netinet/tcp.h>
 
 enum tcpr_flags {
+	TCPR_HAVE_PEER_FIN = 0x1,
+	TCPR_HAVE_PEER_ACK = 0x2,
+	TCPR_HAVE_FIN = 0x4,
+	TCPR_HAVE_ACK = 0x8,
+	TCPR_TIME_WAIT = 0x10,
+	TCPR_DONE_READING = 0x20,
+	TCPR_DONE_WRITING = 0x40,
+};
+
+enum tcpr_result {
 	TCPR_CLOSED = 0x1,
 	TCPR_NO_STATE = 0x2,
 	TCPR_PEER_ACK = 0x4,
@@ -28,12 +38,7 @@ struct tcpr_state {
 	uint32_t seq;
 	uint32_t win;
 	uint32_t delta;
-	uint8_t have_peer_fin;
-	uint8_t have_peer_ack;
-	uint8_t have_fin;
-	uint8_t have_ack;
-	uint8_t done_reading;
-	uint8_t done_writing;
+	uint32_t flags;
 };
 
 struct tcpr_update {
@@ -42,11 +47,7 @@ struct tcpr_update {
 	uint32_t peer_ack;
 	uint32_t ack;
 	uint32_t delta;
-	uint8_t have_peer_ack;
-	uint8_t have_ack;
-	uint8_t time_wait;
-	uint8_t done_reading;
-	uint8_t done_writing;
+	uint32_t flags;
 };
 
 int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,

@@ -3,6 +3,9 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
+#define CLOSING_FLAGS (TCPR_HAVE_PEER_ACK | TCPR_HAVE_PEER_FIN \
+			| TCPR_HAVE_ACK | TCPR_HAVE_FIN)
+
 static uint32_t shorten(uint32_t n)
 {
 	return (n >> 16) + (n & 0xffff);
@@ -43,28 +46,27 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 	if (tcp->th_flags & TH_SYN) {
 		state->delta = 0;
 		state->ack = htonl(ntohl(tcp->th_seq) + 1);
-		state->have_ack = 1;
+		state->flags |= TCPR_HAVE_ACK;
 	}
 
 	if (tcp->th_flags & TH_FIN) {
 		state->peer_fin = htonl(ntohl(tcp->th_seq)
 					+ ((tcp->th_flags & TH_SYN) ? 1 : 0) + 1
 					+ size - tcp->th_off * 4);
-		state->have_peer_fin = 1;
+		state->flags |= TCPR_HAVE_PEER_FIN;
 	}
 
 	if (tcp->th_flags & TH_ACK) {
-		if (!state->have_peer_ack)
+		if (!(state->flags & TCPR_HAVE_PEER_ACK))
 			flags |= TCPR_PEER_ACK;
 
 		state->peer_ack = tcp->th_ack;
-		state->have_peer_ack = 1;
+		state->flags |= TCPR_HAVE_PEER_ACK;
 
-		if (!state->have_ack)
+		if (!(state->flags & TCPR_HAVE_ACK))
 			return TCPR_NO_STATE | flags;
 
-		if (state->have_peer_ack && state->have_peer_fin
-				&& state->have_fin
+		if ((state->flags & CLOSING_FLAGS) == CLOSING_FLAGS
 				&& state->peer_ack == state->fin
 				&& state->peer_fin == state->ack)
 			flags |= TCPR_CLOSED;
@@ -96,31 +98,30 @@ int tcpr_handle_segment(struct tcpr_state *state, struct tcphdr *tcp,
 			+ size - tcp->th_off * 4);
 
 	if (tcp->th_flags & TH_FIN) {
-		if (!state->done_writing)
+		if (!(state->flags & TCPR_DONE_WRITING))
 			return TCPR_SPURIOUS_FIN;
 		state->fin = htonl(ntohl(state->seq) + 1 - state->delta);
-		state->have_fin = 1;
+		state->flags |= TCPR_HAVE_FIN;
 	}
 
 	if (!(tcp->th_flags & TH_ACK)) {
-		if (!state->have_peer_ack)
+		if (!(state->flags & TCPR_HAVE_PEER_ACK))
 			return 0;
 		state->delta = ntohl(state->seq) - ntohl(state->peer_ack);
-		state->done_writing = 0;
+		state->flags &= ~TCPR_DONE_WRITING;
 		return TCPR_RECOVERY;
 	}
 
 	state->raw_ack = tcp->th_ack;
-	if (state->done_reading) {
+	if (state->flags & TCPR_DONE_READING) {
 		state->ack = state->raw_ack;
-		state->have_ack = 1;
-		if (state->have_peer_ack && state->have_peer_fin
-				&& state->have_fin
+		state->flags |= TCPR_HAVE_ACK;
+		if ((state->flags & CLOSING_FLAGS) == CLOSING_FLAGS
 				&& state->peer_ack == state->fin
 				&& state->peer_fin == state->ack)
 			flags |= TCPR_CLOSED;
 	} else {
-		if (!state->have_ack)
+		if (!(state->flags & TCPR_HAVE_ACK))
 			return TCPR_NO_STATE;
 		if (tcp->th_ack != state->ack) {
 			if (size == (size_t)tcp->th_off * 4)
@@ -186,19 +187,17 @@ int tcpr_handle_update(struct tcpr_state *state, struct tcpr_update *update)
 {
 	int flags = 0;
 
-	if (update->time_wait)
+	if (update->flags & TCPR_TIME_WAIT)
 		return TCPR_CLOSED;
-	if (state->done_reading && state->have_ack)
+	if ((update->flags & TCPR_DONE_READING) &&
+			(state->flags & TCPR_HAVE_ACK))
 		update->ack = state->raw_ack;
 	if (update->ack != state->ack)
 		flags |= TCPR_UPDATE_ACK;
 
 	state->ack = update->ack;
 	state->delta = update->delta;
-	state->have_ack = 1;
-	state->done_reading = update->done_reading;
-	state->done_writing = update->done_writing;
-
+	state->flags |= update->flags;
 	return flags;
 }
 
@@ -209,12 +208,9 @@ void tcpr_make_update(struct tcpr_update *update, struct tcpr_state *state)
 	update->peer_ack = state->peer_ack;
 	update->ack = state->ack;
 	update->delta = state->delta;
-	update->have_peer_ack = state->have_peer_ack;
-	update->have_ack = state->have_ack;
-	update->time_wait = state->have_peer_ack && state->have_peer_fin
-				&& state->have_ack && state->have_fin
-				&& state->peer_ack == state->fin
-				&& state->peer_fin == state->ack;
-	update->done_reading = state->done_reading;
-	update->done_writing = state->done_writing;
+	update->flags = state->flags & TCPR_HAVE_ACK;
+	if ((state->flags & CLOSING_FLAGS) == CLOSING_FLAGS
+			&& state->peer_ack == state->fin
+			&& state->peer_fin == state->ack)
+		update->flags |= TCPR_TIME_WAIT;
 }

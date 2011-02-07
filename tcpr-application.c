@@ -21,6 +21,8 @@ static struct update *state;
 static int data_socket;
 static int update_socket;
 static struct timespec timestamp;
+static pthread_mutex_t flags_lock;
+static pthread_cond_t state_ready;
 
 static void message(const char *s)
 {
@@ -73,6 +75,9 @@ static void setup_state(const char *shm)
 		exit(EXIT_FAILURE);
 	}
 	close(fd);
+
+	pthread_mutex_init(&flags_lock, NULL);
+	pthread_cond_init(&state_ready, NULL);
 }
 
 static void setup_update_connection(const char *internal_host,
@@ -272,6 +277,11 @@ static void *read_from_peer(void *arg)
 
 	(void)arg;
 
+	pthread_mutex_lock(&flags_lock);
+	while (!state->tcpr.flags)
+		pthread_cond_wait(&state_ready, &flags_lock);
+	pthread_mutex_unlock(&flags_lock);
+
 	while ((size = read(data_socket, buf, sizeof(buf))) > 0) {
 		for (sent = 0; sent < size; sent += bytes) {
 			message_now("Received data.");
@@ -297,7 +307,9 @@ static void *read_from_peer(void *arg)
 	}
 	message_now("Done reading.");
 	if (update_socket) {
-		state->tcpr.done_reading = 1;
+		pthread_mutex_lock(&flags_lock);
+		state->tcpr.flags |= TCPR_DONE_READING;
+		pthread_mutex_unlock(&flags_lock);
 		if (write(update_socket, state, sizeof(*state)) < 0) {
 			perror("Sending final acknowledgment");
 			exit(EXIT_FAILURE);
@@ -315,6 +327,11 @@ static void *send_to_peer(void *arg)
 
 	(void)arg;
 
+	pthread_mutex_lock(&flags_lock);
+	while (!state->tcpr.flags)
+		pthread_cond_wait(&state_ready, &flags_lock);
+	pthread_mutex_unlock(&flags_lock);
+
 	while ((size = read(0, buf, sizeof(buf))) > 0)
 		for (sent = 0; sent < size; sent += bytes) {
 			message_now("Sending data.");
@@ -331,7 +348,9 @@ static void *send_to_peer(void *arg)
 	}
 	message_now("Done writing.");
 	if (update_socket) {
-		state->tcpr.done_writing = 1;
+		pthread_mutex_lock(&flags_lock);
+		state->tcpr.flags |= TCPR_DONE_WRITING;
+		pthread_mutex_unlock(&flags_lock);
 		if (write(update_socket, state, sizeof(*state)) < 0) {
 			perror("Sending shutdown");
 			exit(EXIT_FAILURE);
@@ -353,21 +372,31 @@ static void *read_updates(void *arg)
 
 	while ((size = read(update_socket, &update, sizeof(update))) > 0) {
 		message_now("Received update.");
-		if (!state->tcpr.have_ack) {
+		if (!state->tcpr.flags) {
 			fprintf(stderr, "Establishing state from filter.\n");
+			pthread_mutex_lock(&flags_lock);
 			memcpy(state, &update, sizeof(update));
-		} else if (!update.tcpr.have_ack) {
+			pthread_cond_broadcast(&state_ready);
+			pthread_mutex_unlock(&flags_lock);
+		} else if (!update.tcpr.flags) {
 			fprintf(stderr, "Recovering filter from state.\n");
 			if (write(update_socket, state, sizeof(*state)) < 0) {
 				perror("Sending filter recovery update");
 				exit(EXIT_FAILURE);
 			}
-		} else {
-			if (update.tcpr.time_wait) {
-				fprintf(stderr, "Entering TIME_WAIT.\n");
-				state->tcpr.time_wait = 1;
-				break;
+		} else if (update.tcpr.flags & TCPR_TIME_WAIT) {
+			fprintf(stderr, "Entering TIME_WAIT.\n");
+			pthread_mutex_lock(&flags_lock);
+			state->tcpr.flags |= TCPR_TIME_WAIT;
+			pthread_mutex_unlock(&flags_lock);
+			/*  FIXME: should TIME_WAIT for safety */
+			message_now("Removing filter state.");
+			if (write(update_socket, state, sizeof(*state)) < 0) {
+				perror("Closing filter state");
+				exit(EXIT_FAILURE);
 			}
+			return NULL;
+		} else {
 			state->tcpr.delta = update.tcpr.delta;
 			fprintf(stderr, "Recovered.\n");
 			fprintf(stderr, "Peer has received %" PRIu32
@@ -380,13 +409,6 @@ static void *read_updates(void *arg)
 	}
 	if (size < 0) {
 		perror("Reading update");
-		exit(EXIT_FAILURE);
-	}
-
-	/*  FIXME: should TIME_WAIT for safety */
-	message_now("Removing filter state.");
-	if (write(update_socket, state, sizeof(*state)) < 0) {
-		perror("Closing filter state");
 		exit(EXIT_FAILURE);
 	}
 	return NULL;
@@ -420,6 +442,9 @@ static void teardown_state(const char *shm)
 		perror("Destroying persistent state");
 		exit(EXIT_FAILURE);
 	}
+
+	pthread_mutex_destroy(&flags_lock);
+	pthread_cond_destroy(&state_ready);
 }
 
 int main(int argc, char **argv)
@@ -470,8 +495,7 @@ int main(int argc, char **argv)
 					external_host, external_port);
 		pthread_create(&update_thread, NULL, read_updates, NULL);
 	}
-
-	if (state->tcpr.have_ack)
+	if (state->tcpr.flags)
 		recover_connection(internal_host, listen_port);
 	else
 		setup_connection(internal_host, listen_port, host, port);
