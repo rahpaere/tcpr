@@ -1,4 +1,4 @@
-EXTRA_DIST = LICENSE tcpr-test.sh netperf-2.4.5-tcpr.patch
+EXTRA_DIST = LICENSE test-setup.sh netperf-2.4.5-tcpr.patch
 AM_CFLAGS = -D_BSD_SOURCE
 
 include_HEADERS = tcpr.h
