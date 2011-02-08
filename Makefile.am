@@ -1,5 +1,5 @@
-EXTRA_DIST = LICENSE test-setup.sh netperf-2.4.5-tcpr.patch
-AM_CFLAGS = -D_BSD_SOURCE
+EXTRA_DIST = LICENSE netperf-2.4.5-tcpr.patch
+AM_CFLAGS = -D_BSD_SOURCE -Wall -Wextra
 
 include_HEADERS = tcpr.h
 bin_PROGRAMS = tcpr-test

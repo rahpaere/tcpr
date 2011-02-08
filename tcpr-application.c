@@ -456,7 +456,7 @@ int main(int argc, char **argv)
 	const char *listen_port = NULL;
 	const char *host = NULL;
 	const char *port = NULL;
-	const char *shm = "/tcpr";
+	const char *shm = NULL;
 	int ret;
 	pthread_t read_thread;
 	pthread_t send_thread;
@@ -489,7 +489,10 @@ int main(int argc, char **argv)
 	if (!port && !listen_port)
 		listen_port = "8888";
 
+	if (!shm)
+		shm = external_port ? "/tcpr-application" : "/tcpr-peer";
 	setup_state(shm);
+
 	if (external_port) {
 		setup_update_connection(internal_host, internal_port,
 					external_host, external_port);
