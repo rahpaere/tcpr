@@ -7,7 +7,7 @@ INSTALLATION
 
 TCPR builds with the standard GNU autotools.  However, the repository
 does not contain any generated files, so immediately after cloning it
-is necessary to set up some infrastructure by running `autotools -i'.
+is necessary to set up some infrastructure by running `autoreconf -i'.
 
 The filter depends on the `libnfnetlink' and `libnetfilter_queue'
 libraries and development headers, which can be installed on an Ubuntu
