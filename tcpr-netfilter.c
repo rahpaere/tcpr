@@ -61,7 +61,7 @@ struct log_packet {
 static const int drop_flags = TCPR_SPURIOUS_FIN | TCPR_SPURIOUS_RST
 	| TCPR_RECOVERY | TCPR_NO_STATE | TCPR_DUPLICATE_ACK;
 static const int update_flags =
-	TCPR_PEER_ACK | TCPR_CLOSED | TCPR_RECOVERY | TCPR_NO_STATE;
+	TCPR_PEER_ACK | TCPR_CLOSING | TCPR_RECOVERY | TCPR_NO_STATE;
 
 static int debugging;
 static unsigned long packets;
@@ -159,23 +159,6 @@ static void log_statistics(void)
 	fprintf(stderr, "  %lu delivered, %lu injected\n",
 			delivered, injected);
 	fprintf(stderr, "  %lu errors\n", errors);
-}
-
-static void split_address(char *address, const char **host, const char **port)
-{
-	char *tmp = strrchr(address, ':');
-	if (tmp) {
-		*tmp = '\0';
-		*host = address;
-		*port = tmp + 1;
-	} else {
-		*host = NULL;
-		*port = address;
-	}
-	if (**port == '\0')
-		*port = NULL;
-	if (**host == '\0')
-		*host = NULL;
 }
 
 static uint32_t shorten(uint32_t n)
@@ -524,12 +507,24 @@ static void terminate(int s)
 	(void)s;
 }
 
+static void split_address(char *address, const char **host, const char **port)
+{
+	char *tmp = strrchr(address, ':');
+	if (tmp) {
+		*tmp++ = '\0';
+		*port = *tmp ? tmp : NULL;
+	} else {
+		*port = NULL;
+	}
+	*host = *address ? address : NULL;
+}
+
 int main(int argc, char **argv)
 {
-	const char *external_host = NULL;
-	const char *external_service = NULL;
-	const char *internal_host = NULL;
-	const char *internal_service = NULL;
+	const char *filter_host = NULL;
+	const char *filter_port = NULL;
+	const char *application_host = NULL;
+	const char *application_port = NULL;
 	char packet[65536];
 	int fd;
 	int ret;
@@ -545,32 +540,33 @@ int main(int argc, char **argv)
 	struct sigaction sa;
 	struct sigaction old;
 
-	while ((ret = getopt(argc, argv, "dp?s:i:e:")) != -1)
+	while ((ret = getopt(argc, argv, "a:f:s:dp?")) != -1)
 		switch (ret) {
+		case 'a':
+			split_address(optarg, &application_host,
+						&application_port);
+			break;
+		case 'f':
+			split_address(optarg, &filter_host, &filter_port);
+			break;
+		case 's':
+			statistics_interval = (unsigned)atol(optarg);
+			statistics_at_end = 1;
+			break;
 		case 'd':
 			debugging++;
 			break;
 		case 'p':
 			handler = passthrough;
 			break;
-		case 's':
-			statistics_interval = (unsigned)atol(optarg);
-			statistics_at_end = 1;
-			break;
-		case 'i':
-			split_address(optarg, &internal_host, &internal_service);
-			break;
-		case 'e':
-			split_address(optarg, &external_host, &external_service);
-			break;
 		default:
 			fprintf(stderr, "Usage: %s [OPTIONS]\n", argv[0]);
+			fprintf(stderr, "  -a HOST:[PORT]  "
+				"Send updates to the specified address.\n");
+			fprintf(stderr, "  -f HOST:[PORT]  "
+				"Receive updates at the specified address.\n");
 			fprintf(stderr, "  -s INTERVAL     "
 				"Print statistics every INTERVAL packets.\n");
-			fprintf(stderr, "  -i [HOST:]PORT  "
-				"Send updates to the specified address.\n");
-			fprintf(stderr, "  -e [HOST:]PORT  "
-				"Receive updates at the specified address.\n");
 			fprintf(stderr, "  -d              "
 				"Print debugging messages and write logs.\n");
 			fprintf(stderr, "  -p              "
@@ -579,6 +575,11 @@ int main(int argc, char **argv)
 				"Print this help message and exit.\n");
 			exit(EXIT_FAILURE);
 		}
+
+	if (!filter_port)
+		filter_port = application_port ? application_port : "7777";
+	if (!application_port)
+		application_port = filter_port;
 
 	ticks_per_second = sysconf(_SC_CLK_TCK);
 
@@ -618,7 +619,7 @@ int main(int argc, char **argv)
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_DGRAM;
 	hints.ai_protocol = IPPROTO_UDP;
-	ret = getaddrinfo(internal_host, internal_service, &hints, &ai);
+	ret = getaddrinfo(application_host, application_port, &hints, &ai);
 	if (ret) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
 		exit(EXIT_FAILURE);
@@ -626,7 +627,7 @@ int main(int argc, char **argv)
 	internal_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
 	internal_port = ((struct sockaddr_in *)ai->ai_addr)->sin_port;
 	freeaddrinfo(ai);
-	ret = getaddrinfo(external_host, external_service, &hints, &ai);
+	ret = getaddrinfo(filter_host, filter_port, &hints, &ai);
 	if (ret) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
 		exit(EXIT_FAILURE);

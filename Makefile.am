@@ -10,8 +10,8 @@ if WITH_NETFILTER
   tcpr_netfilter_SOURCES = tcpr-netfilter.c tcpr.c
 endif
 
-if WITH_APPLICATION
-  bin_PROGRAMS += tcpr-application
-  tcpr_application_LIBS = -pthread
-  tcpr_application_CFLAGS = -pthread
+if WITH_CHAT
+  bin_PROGRAMS += tcpr-chat
+  tcpr_chat_LIBS = -pthread
+  tcpr_chat_CFLAGS = -pthread
 endif

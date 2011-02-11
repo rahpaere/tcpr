@@ -17,6 +17,6 @@ stamp-h1
 state.log
 *.swp
 *.tar.*
-tcpr-application
+tcpr-chat
 tcpr-netfilter
 tcpr-test

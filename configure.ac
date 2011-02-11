@@ -16,8 +16,8 @@ AC_SEARCH_LIBS([nfnl_send], [nfnetlink],
   [AM_CONDITIONAL([WITH_NETFILTER], [false])])
 
 AC_SEARCH_LIBS([shm_open], [rt],
-  [AM_CONDITIONAL([WITH_APPLICATION], [true])],
-  [AM_CONDITIONAL([WITH_APPLICATION], [false])])
+  [AM_CONDITIONAL([WITH_CHAT], [true])],
+  [AM_CONDITIONAL([WITH_CHAT], [false])])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT

@@ -1,13 +1,15 @@
-The goal of this document is to get a new user or developer of TCPR
-up to speed, from cloning the repository to using the unit tests and
-demonstration application.
+The TCPR home page, <http://www.cs.cornell.edu/~burgess/tcpr/>, includes
+information about the people involved in the project, links to the code,
+and a copy of the research paper, which provides in-depth information
+about TCPR's design.  This README provides a practical introduction to
+guide someone new to the project from first cloning the code repository
+through running the unit tests and conducting a live demonstration.
 
+TCPR uses the GNU autotools build system.  However, the repository does
+not contain any generated files, so once, right after cloning, you must
+set up some infrastructure:
 
-INSTALLATION
-
-TCPR builds with the standard GNU autotools.  However, the repository
-does not contain any generated files, so immediately after cloning it
-is necessary to set up some infrastructure by running `autoreconf -i'.
+  $ autoreconf -i
 
 The filter depends on the `libnfnetlink' and `libnetfilter_queue'
 libraries and development headers, which can be installed on an Ubuntu
@@ -15,67 +17,44 @@ machine with:
 
   # apt-get install libnetfilter-queue-dev
 
-Other programs and packages useful for the following examples, or debugging,
-include:
+The following examples also assume you have some common system
+administration utilities installed:
 
-  iptables
-  iproute2
-  wireshark
-  tshark
-  socat
-  openvpn
+  # apt-get install iptables iproute openvpn
 
-Once set up, the usual `./configure && make' incantation will build TCPR,
-resulting in three programs:
+Finally, the following are often useful for testing and debugging:
 
-  tcpr-netfilter    the actual packet filter
-  tcpr-application  the demonstration chat application
-  tcpr-test         the unit tests
+  # apt-get install wireshark tshark socat
 
-As usual, `make install' should put the programs in our PATH, and `make
-uninstall' removes them again.
+Once the dependencies are installed, the usual incantations will build
+and install TCPR.
 
+  $ ./configure && make
+  # make install
 
-FILTER OVERVIEW
+Three programs are installed:
 
-For a particular application, which might consist of many replicas,
-one instance of the packet filter is deployed such that any TCP packet
-the application sends or receives must flow through it; the recommended
-approach is to run them on the same machine.  The application is bound
-to an `internal' address, which the filter translates to an `external'
-address for the benefit of the application's peers.  The peers must be
-bound to addresses different from the application's external address,
-because it is used to distinguish packet directions.
-
-In addition to normal TCP traffic, the application and filter also
-communicate directly over UDP, at pre-configured ports.  For this purpose,
-the application is bound to the internal address and the filter is bound
-to the external address.
-
-Thus, the filter needs four pieces of information: the internal and
-external addresses, and the internal (application) and external (filter)
-ports for out-of-band communication.
+  tcpr-netfilter  - the packet filter
+  tcpr-chat       - the demonstration program
+  tcpr-test       - the unit tests
 
 
-EXAMPLE: LOCAL DEMONSTRATION
-
-The demonstration application, `tcpr-application', is able to function as
-a as a client or a server; once a connection is established, it simply
-bridges its standard input and output with the connection, enabling a
-sort of `chat' demonstration.
-
-For a working example, let us step through using the demonstration
-program over the loopback device on a single machine.  The peer will use
-the standard loopback address, 127.0.0.1, and in order to have distinct
-addresses for the application and the filter (internal and external),
-we will arbitrarily establish two more:
+The demonstration program is able to function as either client or server,
+and fault-tolerant application or legacy peer.  For a working example,
+assume you will conduct a demonstration over the loopback device on a
+single machine.  The legacy peer endpoint will be the standard loopback
+address, 127.0.0.1.  The filter will rewrite an internal address for the
+fault-tolerant application into an externally visible one for the peer;
+those addresses must be distinct, and it is easiest if they are also
+different from the peer's address, so give your loopback device two more
+arbitrary addresses.
 
   # ip addr add dev lo 127.0.0.2/32
   # ip addr add dev lo 127.0.0.3/32
 
-To double check, we can list the current addresses with `ip addr'.  Later,
-we can remove these addresses by repeating the above commands with `del'
-instead of `add'.
+To double check, list the current addresses:
+
+  $ ip addr
 
 Now it is necessary to configure the Linux builtin firewall, Netfilter, to
 capture the appropriate packets and send them to userspace for the filter:
@@ -83,84 +62,94 @@ capture the appropriate packets and send them to userspace for the filter:
   # iptables -A OUTPUT -s 127.0.0.3 -j NFQUEUE
   # iptables -A INPUT -d 127.0.0.2 -j NFQUEUE
 
-To double check, we can list the current rules with `iptables -L -n'.
-Later, we can remove these rules by repeating the above commands with
-`-D' instead of `-A', or run `iptables -F' to remove all rules.
+To double check, list the current rules:
 
-Now we can run the filter, configuring the internal and external addresses
-and ports with the `-i' and `-e' options:
+  # iptables -L -n
 
-  # tcpr-netfilter -e 127.0.0.2:6666 -i 127.0.0.3:7777 &
+Now run the filter.  It needs to know the internal address of the
+application and the external address given by the filter.
 
-Now we run the application as a server, listening for a connection to
-its external address at port 8888:
+  # tcpr-netfilter -a 127.0.0.3 -f 127.0.0.2
 
-  $ tcpr-application -e 127.0.0.2:6666 -i 127.0.0.3:7777 -l 8888
+In its own terminal, run the demonstration program as a fault-tolerant
+server application:
 
-In another terminal, we run the peer:
+  $ tcpr-chat -b 127.0.0.3 -f 127.0.0.2
 
-  $ socat -t 60 tcp:127.0.0.2:8888,bind=127.0.0.1,reuseaddr -
+In yet another terminal, run the demonstration program as a client peer:
 
-Now the two programs can talk back and forth in a line-oriented manner.
-We can kill the filter with `pkill tcpr-netfilter', run it again, and
-it will recover; similarly we can kill the application with control-C,
-run it again, and it will recover; we can also kill and recover both at
-the same time.
+  $ tcpr-chat -b 127.0.0.1 -c 127.0.0.2
 
-To get a closer look at what is happening, or to debug a problem,
-we can run the filter with the `-d' option, which causes it to dump
-packet traces from both internal and external perspectives, along with
-per-packet snapshots of its internal state for the connection.  It can
-also be useful to watch what state the various connections are in:
+Now chat back and forth between the two endpoints.  You can kill the
+fault-tolerant application with control-C and recover it by running
+the same command-line again; you can also kill and recovery the filter
+in the same way, or even kill both and recover them simultaneously.
+When you are finished at either endpoint, type control-D.  When both
+ends have finished, they will exit.  Finally, kill the filter.
+
+To get a closer look at what is happening, or to debug a problem, you
+can run the filter with the `-d' option, which causes it to dump packet
+traces from both internal and external perspectives, along with per-packet
+snapshots of its internal state for the connection.  It can also be useful
+to set up another terminal to watch the state various connections are in:
 
   $ watch 'netstat -n | grep 127\\.'
 
-When finished, we can close the connection by typing control-D at
-each end.  We can then establish a new connection using the same ports
-right away.
+To clean up, remove the addresses you added:
+
+  # ip addr del dev lo 127.0.0.2/32
+  # ip addr del dev lo 127.0.0.3/32
+
+Also remove your filter rules:
+
+  # iptables -A OUTPUT -s 127.0.0.3 -j NFQUEUE
+  # iptables -A INPUT -d 127.0.0.2 -j NFQUEUE
+
+Or, if they are the only ones, you can simply remove all filter rules:
+
+  # iptables -F
 
 
-EXAMPLE: UNIT TESTS
-
-The unit test program, `tcpr-test', employs a tunnel device in order
-to appear to be an entire network of separate machines, from which it
-plays the role of both application and peer and runs the filter through
-its paces.  First, the tunnel device must be created:
+Whereas the demonstration program which uses the operating system's actual
+network stack, the unit tests employ a tunnel device in order to appear to
+be an entire network of separate machines, injecting manually-constructed
+packets to simulate various situations and run the filter through
+its paces.  To run the unit tests, create the tunnel device, give it a
+network of addresses, and establish the filter rules:
 
   # openvpn --mktun --dev tcpr-test --dev-type tun
-
-We can also pass the `--user' option to establish a non-root user who can
-run the test.  To double check, we can run `ip link' to see the current
-devices.  Later, we can remove the device by repeating the above command
-with `--rmtun' instead of `--mktun'.  Once the device exists, we must turn
-it on, establish its address, and set up the appropriate firewall rules:
-
   # ip link set tcpr-test up
   # ip addr add 10.10.10.1/24 dev tcpr-test
   # iptables -A FORWARD -s 10.10.10.1/24 -j NFQUEUE
 
-Finally, we must configure the kernel to route packets and not complain:
+Finally, configure the kernel to route packets and not complain about
+the inefficient routing being simulated:
 
   # echo 0 | tee /proc/sys/net/ipv4/conf/*/send_redirects > /dev/null
   # echo 1 | tee /proc/sys/net/ipv4/ip_forward > /dev/null
 
-Once set up, we run the filter with the following options:
+Now run the filter:
 
-  # tcpr-netfilter -i 10.10.10.4:6666 -e 10.10.10.3:7777 &
+  # tcpr-netfilter -a 10.10.10.4 -f 10.10.10.3
 
-And, last but not least, the test:
+In its own terminal, run the tests:
 
   # tcpr-test
 
-The test cleans up after itself, so it can be run multiple times without
-restarting the filter.
+Each invocation will creates packet traces, not unlike those the filter
+leaves with the `-d' option, to aid in debugging should something fail.
+
+The test program cleans up after itself, so it can be run multiple times
+without restarting the filter.  When you are finished, kill the filter.
+To clean up, remove the tunnel device and filter rules:
+
+  # openvpn --rmtun --dev tcpr-test --dev-type tun
+  # iptables -D FORWARD -s 10.10.10.1/24 -j NFQUEUE
 
 
-WRITING NEW APPLICATIONS
-
-Look through `tcpr-application.c' in detail.  It is useful not only
-for demonstrating the system to others, but also for demonstrating by
-example how to write a TCPR-aware application.
+To write new applications, look through `tcpr-chat.c' in detail.  It is
+useful not only for demonstrating the system to others, but also for
+demonstrating by example how to write a TCPR-aware application.
 
 
 Go forth and protect TCP!

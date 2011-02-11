@@ -69,7 +69,7 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 		if ((state->flags & CLOSING_FLAGS) == CLOSING_FLAGS
 				&& state->peer_ack == state->fin
 				&& state->peer_fin == state->ack)
-			flags |= TCPR_CLOSED;
+			flags |= TCPR_CLOSING;
 
 		sum += shorten(~tcp->th_ack);
 		tcp->th_ack = htonl(ntohl(tcp->th_ack) + state->delta);
@@ -119,7 +119,7 @@ int tcpr_handle_segment(struct tcpr_state *state, struct tcphdr *tcp,
 		if ((state->flags & CLOSING_FLAGS) == CLOSING_FLAGS
 				&& state->peer_ack == state->fin
 				&& state->peer_fin == state->ack)
-			flags |= TCPR_CLOSED;
+			flags |= TCPR_CLOSING;
 	} else {
 		if (!(state->flags & TCPR_HAVE_ACK))
 			return TCPR_NO_STATE;
@@ -198,6 +198,12 @@ int tcpr_handle_update(struct tcpr_state *state, struct tcpr_update *update)
 	state->ack = update->ack;
 	state->delta = update->delta;
 	state->flags |= update->flags;
+
+	if ((state->flags & CLOSING_FLAGS) == CLOSING_FLAGS
+			&& state->peer_ack == state->fin
+			&& state->peer_fin == state->ack)
+		flags |= TCPR_CLOSING;
+
 	return flags;
 }
 

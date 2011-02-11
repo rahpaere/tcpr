@@ -390,7 +390,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
-	recv_update(net | 3, net | 4, 7777, 6666,
+	recv_update(net | 3, net | 4, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 1, 0, TCPR_HAVE_ACK);
 
@@ -424,7 +424,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 4, net | 3, 6666, 7777,
+	send_update(net | 4, net | 3, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5, 0, TCPR_HAVE_ACK);
 
@@ -473,7 +473,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
-	recv_update(net | 3, net | 5, 7777, 6666,
+	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
 			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
@@ -500,7 +500,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 5, net | 3, 6666, 7777,
+	send_update(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 9,
 			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
@@ -540,7 +540,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 5, net | 3, 6666, 7777,
+	send_update(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 10, 0xdeadbeef + 9,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
@@ -552,7 +552,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 5, net | 3, 6666, 7777,
+	send_update(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 10, 0xdeadbeef + 9,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
@@ -575,14 +575,14 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update (TIME_WAIT)\n");
-	recv_update(net | 3, net | 5, 7777, 6666,
+	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 11, 0xdeadbeef + 10,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
 
 	fprintf(stderr, "Application: update (remove state)\n");
-	send_update(net | 5, net | 3, 6666, 7777,
+	send_update(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 11, 0xdeadbeef + 10,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
@@ -595,11 +595,11 @@ int main(int argc, char **argv)
 			0, NULL, 2, "a");
 
 	fprintf(stderr, "     Filter: update (failure)\n");
-	recv_update(net | 3, net | 5, 7777, 6666,
+	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 5, net | 3, 6666, 7777,
+	send_update(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xbeefbead, 0xbabedeed - 4, 0, TCPR_HAVE_ACK);
 
@@ -617,7 +617,7 @@ int main(int argc, char **argv)
 			0, NULL, 2, "a");
 
 	fprintf(stderr, "Application: update (remove state)\n");
-	send_update(net | 5, net | 3, 6666, 7777,
+	send_update(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xbeefbead, 0xbabedeed - 4, 0,
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
@@ -634,12 +634,12 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update (failure)\n");
-	recv_update(net | 3, net | 5, 7777, 6666,
+	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 3, net | 5, 7777, 6666,
+	send_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5, 0, TCPR_HAVE_ACK);
 
@@ -658,7 +658,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
-	recv_update(net | 3, net | 5, 7777, 6666,
+	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
 			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
@@ -672,7 +672,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: update (reset)\n");
-	send_update(net | 4, net | 3, 6666, 7777,
+	send_update(net | 4, net | 3, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
