@@ -40,6 +40,7 @@ struct tcpr_state {
 	uint32_t win;
 	uint32_t delta;
 	uint32_t flags;
+	uint16_t mss;
 };
 
 struct tcpr_update {
@@ -49,6 +50,11 @@ struct tcpr_update {
 	uint32_t ack;
 	uint32_t delta;
 	uint32_t flags;
+	uint16_t mss;
+};
+
+struct tcpr_options {
+	uint16_t mss;
 };
 
 int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
