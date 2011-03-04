@@ -25,6 +25,7 @@ enum tcpr_result {
 	TCPR_DUPLICATE_ACK = 0x40,
 	TCPR_UPDATE_ACK = 0x80,
 	TCPR_CLOSING = 0x100,
+	TCPR_SMALLER_MSS = 0x200,
 };
 
 struct tcpr_state {

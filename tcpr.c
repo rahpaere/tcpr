@@ -2,6 +2,7 @@
 
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <stdio.h>
 
 #define CLOSING_FLAGS (TCPR_HAVE_PEER_ACK | TCPR_HAVE_PEER_FIN \
 			| TCPR_HAVE_ACK | TCPR_HAVE_FIN)
@@ -49,6 +50,11 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 		state->delta = 0;
 		state->ack = htonl(ntohl(tcp->th_seq) + 1);
 		state->flags |= TCPR_HAVE_ACK;
+        if (opts.mss < state->mss) {
+            printf("Peer's new MSS of %hu is less than its previous MSS of %hu", opts.mss, state->mss);
+            flags |= TCPR_SMALLER_MSS;
+        }
+
 		state->mss = opts.mss;
 	}
 
@@ -171,6 +177,8 @@ void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
 	tcp->th_win = state->peer_win;
 	tcp->th_sum = 0;
 	tcp->th_urp = 0;
+
+    *((uint32_t *)(tcp+1)) = 0x02040000 | state->mss;
 }
 
 void tcpr_make_reset(struct tcphdr *tcp, struct tcpr_state *state)
