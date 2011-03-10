@@ -25,6 +25,7 @@ static void handle_options(struct tcphdr *tcp, struct tcpr_options *opts)
 		case TCPOPT_MAXSEG:
 			opts->mss = *((uint16_t*)(option+2));
 		case TCPOPT_WINDOW:
+            opts->ws = *((uint8_t*)(option+2));
 		case TCPOPT_TIMESTAMP:
 			option += option[1];
 			break;
@@ -56,6 +57,7 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
         }
 
 		state->mss = opts.mss;
+        state->ws = opts.ws;
 	}
 
 	if (tcp->th_flags & TH_FIN) {
@@ -178,7 +180,8 @@ void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
 	tcp->th_sum = 0;
 	tcp->th_urp = 0;
 
-    *((uint32_t *)(tcp+1)) = 0x02040000 | state->mss;
+    *((uint32_t *)(tcp+1)) = htonl(0x02040000 | state->mss);
+    *((uint32_t *)(tcp+1)+1) = htonl(0x03030000 | (state->ws << 8));
 }
 
 void tcpr_make_reset(struct tcphdr *tcp, struct tcpr_state *state)
@@ -217,6 +220,7 @@ int tcpr_handle_update(struct tcpr_state *state, struct tcpr_update *update)
 		flags |= TCPR_CLOSING;
 	
 	state->mss = update->mss;
+	state->ws = update->ws;
 
 	return flags;
 }
@@ -234,4 +238,5 @@ void tcpr_make_update(struct tcpr_update *update, struct tcpr_state *state)
 			&& state->peer_fin == state->ack)
 		update->flags |= TCPR_TIME_WAIT;
 	update->mss = state->mss;
+	update->ws = state->ws;
 }

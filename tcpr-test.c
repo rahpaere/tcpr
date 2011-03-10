@@ -362,16 +362,22 @@ int main(int argc, char **argv)
 	(void)argc;
 	(void)argv;
 	const uint32_t net = 0x0a0a0a00;
+    size_t options_size = 8;
+    char *options;
 
 	tun = open_tun("tcpr-test");
 	external_log = open_log("test-external.pcap");
 	internal_log = open_log("test-internal.pcap");
 
+    options = (char *) malloc(options_size);
+    *((uint32_t *)options) = htonl(0x02040640);
+    *((uint32_t *)(options+4)) = htonl(0x03030200);
+
 	fprintf(stderr, "       Peer: SYN\n");
 	send_segment(external_log, net | 2, net | 3, 8888, 9999,
-			TH_SYN, 0xdeadbeef, 0, 0, NULL, 0, NULL);
+			TH_SYN, 0xdeadbeef, 0, options_size, options, 0, NULL);
 	recv_segment(internal_log, net | 2, net | 4, 8888, 9999,
-			TH_SYN, 0xdeadbeef, 0, 0, NULL, 0, NULL);
+			TH_SYN, 0xdeadbeef, 0, options_size, options, 0, NULL);
 
 	fprintf(stderr, "Application: SYN ACK\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
