@@ -116,7 +116,7 @@ static void expect(uint32_t actual, uint32_t expected, const char *s)
 
 static uint32_t shorten(uint32_t n)
 {
-        return (n >> 16) + (n & 0xffff);
+	return (n >> 16) + (n & 0xffff);
 }
 
 static uint32_t checksum(uint16_t *data, size_t size)
@@ -308,7 +308,8 @@ static void recv_update(uint32_t saddr, uint32_t daddr,
 				uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
-				uint32_t delta, uint32_t flags)
+				uint32_t delta, uint32_t flags, uint16_t mss,
+				uint8_t ws)
 {
 	char packet[SNAPLEN];
 	struct ip *ip;
@@ -355,6 +356,8 @@ static void recv_update(uint32_t saddr, uint32_t daddr,
 		"Update acknowledgment");
 	expect(update->tcpr.delta, delta, "Update delta");
 	expect(update->tcpr.flags, flags, "Update flags");
+	expect(ntohs(update->tcpr.mss), mss, "Update maximum segment size");
+	expect(update->tcpr.ws, ws, "Update window scaling");
 }
 
 int main(int argc, char **argv)
@@ -362,16 +365,16 @@ int main(int argc, char **argv)
 	(void)argc;
 	(void)argv;
 	const uint32_t net = 0x0a0a0a00;
-    size_t options_size = 8;
-    char *options;
+	size_t options_size = 8;
+	char *options;
 
 	tun = open_tun("tcpr-test");
 	external_log = open_log("test-external.pcap");
 	internal_log = open_log("test-internal.pcap");
 
-    options = (char *) malloc(options_size);
-    *((uint32_t *)options) = htonl(0x02040640);
-    *((uint32_t *)(options+4)) = htonl(0x03030200);
+	options = (char *) malloc(options_size);
+	*((uint32_t *)options) = htonl(0x02040640);
+	*((uint32_t *)(options+4)) = htonl(0x03030200);
 
 	fprintf(stderr, "       Peer: SYN\n");
 	send_segment(external_log, net | 2, net | 3, 8888, 9999,
@@ -398,7 +401,8 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(net | 3, net | 4, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 1, 0, TCPR_HAVE_ACK);
+			0xcafebabe + 1, 0xdeadbeef + 1, 0, TCPR_HAVE_ACK,
+			0x640, 2);
 
 	fprintf(stderr, "Application: \"foo\"\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
@@ -482,7 +486,8 @@ int main(int argc, char **argv)
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
-			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
+			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK,
+			0, 0);
 
 	fprintf(stderr, "Application: ACK\n");
 	send_segment(internal_log, net | 5, net | 2, 9999, 8888,
@@ -585,7 +590,8 @@ int main(int argc, char **argv)
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 11, 0xdeadbeef + 10,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
-			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
+			TCPR_HAVE_ACK | TCPR_TIME_WAIT, 
+			0, 0);
 
 	fprintf(stderr, "Application: update (remove state)\n");
 	send_update(net | 5, net | 3, 7777, 7777,
@@ -602,7 +608,8 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "     Filter: update (failure)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
-			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0);
+			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0,
+			0, 0);
 
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 5, net | 3, 7777, 7777,
@@ -642,7 +649,8 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update (failure)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
-			0xcafebabe + 5, 0, 0, 0);
+			0xcafebabe + 5, 0, 0, 0, 
+			0, 0);
 
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 3, net | 5, 7777, 7777,
@@ -667,7 +675,8 @@ int main(int argc, char **argv)
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
-			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
+			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK,
+			0, 0);
 
 	fprintf(stderr, "Application: ACK\n");
 	send_segment(internal_log, net | 5, net | 2, 9999, 8888,

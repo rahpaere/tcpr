@@ -25,7 +25,7 @@ static void handle_options(struct tcphdr *tcp, struct tcpr_options *opts)
 		case TCPOPT_MAXSEG:
 			opts->mss = *((uint16_t*)(option+2));
 		case TCPOPT_WINDOW:
-            opts->ws = *((uint8_t*)(option+2));
+			opts->ws = *((uint8_t*)(option+2));
 		case TCPOPT_TIMESTAMP:
 			option += option[1];
 			break;
@@ -51,13 +51,13 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 		state->delta = 0;
 		state->ack = htonl(ntohl(tcp->th_seq) + 1);
 		state->flags |= TCPR_HAVE_ACK;
-        if (opts.mss < state->mss) {
-            printf("Peer's new MSS of %hu is less than its previous MSS of %hu", opts.mss, state->mss);
-            flags |= TCPR_SMALLER_MSS;
-        }
+		if (opts.mss < state->mss) {
+			printf("Peer's new MSS of %hu is less than its previous MSS of %hu", opts.mss, state->mss);
+			flags |= TCPR_SMALLER_MSS;
+		}
 
 		state->mss = opts.mss;
-        state->ws = opts.ws;
+		state->ws = opts.ws;
 	}
 
 	if (tcp->th_flags & TH_FIN) {
@@ -180,8 +180,8 @@ void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
 	tcp->th_sum = 0;
 	tcp->th_urp = 0;
 
-    *((uint32_t *)(tcp+1)) = htonl(0x02040000 | state->mss);
-    *((uint32_t *)(tcp+1)+1) = htonl(0x03030000 | (state->ws << 8));
+	*((uint32_t *)(tcp+1)) = htonl(0x02040000 | state->mss);
+	*((uint32_t *)(tcp+1)+1) = htonl(0x03030000 | (state->ws << 8));
 }
 
 void tcpr_make_reset(struct tcphdr *tcp, struct tcpr_state *state)
