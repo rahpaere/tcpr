@@ -113,7 +113,6 @@ int tcpr_handle_segment(struct tcpr_state *state, struct tcphdr *tcp,
 	if (tcp->th_flags & TH_RST)
 		return TCPR_SPURIOUS_RST;
 
-	handle_options(tcp);
 	state->win = tcp->th_win;
 	state->seq = htonl(ntohl(tcp->th_seq)
 			+ ((tcp->th_flags & TH_SYN) ? 1 : 0)

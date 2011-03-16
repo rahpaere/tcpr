@@ -2,8 +2,12 @@ EXTRA_DIST = LICENSE netperf-2.4.5-tcpr.patch
 AM_CFLAGS = -D_BSD_SOURCE -Wall -Wextra
 
 include_HEADERS = tcpr.h
-bin_PROGRAMS = tcpr-test
-tcpr_test_SOURCES = tcpr-test.c
+bin_PROGRAMS =
+
+TESTS = test/tcpr-test
+check_PROGRAMS = $(TESTS)
+
+test_tcpr_test_SOURCES = test/tcpr-test.c test/test.c test/test.h
 
 if WITH_NETFILTER
   bin_PROGRAMS += tcpr-netfilter
