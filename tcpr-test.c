@@ -308,8 +308,8 @@ static void recv_update(uint32_t saddr, uint32_t daddr,
 				uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
-				uint32_t delta, uint32_t flags, uint16_t mss,
-				uint8_t ws)
+				uint16_t peer_mss, uint8_t peer_ws,
+				uint32_t delta, uint32_t flags)
 {
 	char packet[SNAPLEN];
 	struct ip *ip;
@@ -352,12 +352,16 @@ static void recv_update(uint32_t saddr, uint32_t daddr,
 	expect(ntohs(update->tcpr.port), port, "Update port");
 	expect(ntohl(update->tcpr.peer_ack), peer_ack,
 		"Update peer acknowledgment");
+	if (flags & TCPR_HAVE_PEER_MSS)
+		expect(ntohs(update->tcpr.peer_mss), peer_mss,
+			"Update peer maximum segment size");
+	if (flags & TCPR_HAVE_PEER_WS)
+		expect(update->tcpr.peer_ws, peer_ws,
+			"Update peer window scaling");
 	expect(ntohl(update->tcpr.ack), ack,
 		"Update acknowledgment");
 	expect(update->tcpr.delta, delta, "Update delta");
 	expect(update->tcpr.flags, flags, "Update flags");
-	expect(ntohs(update->tcpr.mss), mss, "Update maximum segment size");
-	expect(update->tcpr.ws, ws, "Update window scaling");
 }
 
 int main(int argc, char **argv)
@@ -365,22 +369,16 @@ int main(int argc, char **argv)
 	(void)argc;
 	(void)argv;
 	const uint32_t net = 0x0a0a0a00;
-	size_t options_size = 8;
-	char *options;
 
 	tun = open_tun("tcpr-test");
 	external_log = open_log("test-external.pcap");
 	internal_log = open_log("test-internal.pcap");
 
-	options = (char *) malloc(options_size);
-	*((uint32_t *)options) = htonl(0x02040640);
-	*((uint32_t *)(options+4)) = htonl(0x03030200);
-
 	fprintf(stderr, "       Peer: SYN\n");
 	send_segment(external_log, net | 2, net | 3, 8888, 9999,
-			TH_SYN, 0xdeadbeef, 0, options_size, options, 0, NULL);
+			TH_SYN, 0xdeadbeef, 0, 0, NULL, 0, NULL);
 	recv_segment(internal_log, net | 2, net | 4, 8888, 9999,
-			TH_SYN, 0xdeadbeef, 0, options_size, options, 0, NULL);
+			TH_SYN, 0xdeadbeef, 0, 0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: SYN ACK\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
@@ -401,8 +399,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(net | 3, net | 4, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 1, 0, TCPR_HAVE_ACK,
-			0x640, 2);
+			0xcafebabe + 1, 0xdeadbeef + 1, 0, TCPR_HAVE_ACK);
 
 	fprintf(stderr, "Application: \"foo\"\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
@@ -486,8 +483,7 @@ int main(int argc, char **argv)
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
-			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK,
-			0, 0);
+			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
 
 	fprintf(stderr, "Application: ACK\n");
 	send_segment(internal_log, net | 5, net | 2, 9999, 8888,
@@ -590,8 +586,7 @@ int main(int argc, char **argv)
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 11, 0xdeadbeef + 10,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
-			TCPR_HAVE_ACK | TCPR_TIME_WAIT, 
-			0, 0);
+			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
 
 	fprintf(stderr, "Application: update (remove state)\n");
 	send_update(net | 5, net | 3, 7777, 7777,
@@ -608,8 +603,7 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "     Filter: update (failure)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
-			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0,
-			0, 0);
+			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 5, net | 3, 7777, 7777,
@@ -649,8 +643,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update (failure)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
-			0xcafebabe + 5, 0, 0, 0, 
-			0, 0);
+			0xcafebabe + 5, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 3, net | 5, 7777, 7777,
@@ -675,8 +668,7 @@ int main(int argc, char **argv)
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 5, 0xdeadbeef + 5,
-			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK,
-			0, 0);
+			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
 
 	fprintf(stderr, "Application: ACK\n");
 	send_segment(internal_log, net | 5, net | 2, 9999, 8888,

@@ -13,6 +13,8 @@ enum tcpr_flags {
 	TCPR_TIME_WAIT = 0x10,
 	TCPR_DONE_READING = 0x20,
 	TCPR_DONE_WRITING = 0x40,
+	TCPR_HAVE_PEER_MSS = 0x80,
+	TCPR_HAVE_PEER_WS = 0x100,
 };
 
 enum tcpr_result {
@@ -25,7 +27,6 @@ enum tcpr_result {
 	TCPR_DUPLICATE_ACK = 0x40,
 	TCPR_UPDATE_ACK = 0x80,
 	TCPR_CLOSING = 0x100,
-	TCPR_SMALLER_MSS = 0x200,
 };
 
 struct tcpr_state {
@@ -34,6 +35,8 @@ struct tcpr_state {
 	uint32_t peer_ack;
 	uint32_t peer_fin;
 	uint32_t peer_win;
+	uint16_t peer_mss;
+	uint8_t peer_ws;
 	uint32_t raw_ack;
 	uint32_t ack;
 	uint32_t fin;
@@ -41,24 +44,17 @@ struct tcpr_state {
 	uint32_t win;
 	uint32_t delta;
 	uint32_t flags;
-	uint16_t mss;
-	uint8_t ws;
 };
 
 struct tcpr_update {
 	uint16_t peer_port;
 	uint16_t port;
 	uint32_t peer_ack;
+	uint16_t peer_mss;
+	uint8_t peer_ws;
 	uint32_t ack;
 	uint32_t delta;
 	uint32_t flags;
-	uint16_t mss;
-	uint8_t ws;
-};
-
-struct tcpr_options {
-	uint16_t mss;
-	uint8_t ws;
 };
 
 int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
