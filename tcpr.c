@@ -11,18 +11,28 @@ static uint32_t shorten(uint32_t n)
 	return (n >> 16) + (n & 0xffff);
 }
 
-static void handle_options(struct tcphdr *tcp)
+int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
+					size_t size)
 {
+	uint32_t sum = tcp->th_sum ^ 0xffff;
 	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
 	uint8_t *option = (uint8_t *)(tcp + 1);
 	uint8_t *tmp;
+	int flags = 0;
+
 	while (option < end && *option != TCPOPT_EOL)
 		switch (*option) {
 		case TCPOPT_NOP:
 			option++;
 			break;
 		case TCPOPT_MAXSEG:
+			state->peer_mss = (uint16_t)option[2] << 8 | option[1];
+			state->flags |= TCPR_HAVE_PEER_MSS;
+			break;
 		case TCPOPT_WINDOW:
+			state->peer_ws = option[2];
+			state->flags |= TCPR_HAVE_PEER_WS;
+			break;
 		case TCPOPT_TIMESTAMP:
 			option += option[1];
 			break;
@@ -32,15 +42,7 @@ static void handle_options(struct tcphdr *tcp)
 				*option = TCPOPT_NOP;
 			break;
 		}
-}
 
-int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
-					size_t size)
-{
-	uint32_t sum = tcp->th_sum ^ 0xffff;
-	int flags = 0;
-
-	handle_options(tcp);
 	state->peer_win = tcp->th_win;
 
 	if (tcp->th_flags & TH_SYN) {
@@ -87,6 +89,26 @@ int tcpr_handle_segment(struct tcpr_state *state, struct tcphdr *tcp,
 {
 	uint32_t sum = tcp->th_sum ^ 0xffff;
 	int flags = 0;
+	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
+	uint8_t *option = (uint8_t *)(tcp + 1);
+	uint8_t *tmp;
+
+	while (option < end && *option != TCPOPT_EOL)
+		switch (*option) {
+		case TCPOPT_NOP:
+			option++;
+			break;
+		case TCPOPT_MAXSEG:
+		case TCPOPT_WINDOW:
+		case TCPOPT_TIMESTAMP:
+			option += option[1];
+			break;
+		default:
+			tcp->th_sum = 0;
+			for (tmp = option + option[1]; option != tmp; option++)
+				*option = TCPOPT_NOP;
+			break;
+		}
 
 	if (tcp->th_flags & TH_RST)
 		return TCPR_SPURIOUS_RST;
@@ -157,6 +179,9 @@ void tcpr_make_acknowledgment(struct tcphdr *tcp, struct tcpr_state *state)
 
 void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
 {
+	uint8_t *option = (uint8_t *)(tcp + 1);
+	size_t i = 0;
+
 	tcp->th_sport = state->peer_port;
 	tcp->th_dport = state->port;
 	tcp->th_seq = htonl(ntohl(state->ack) - 1);
@@ -167,6 +192,23 @@ void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
 	tcp->th_win = state->peer_win;
 	tcp->th_sum = 0;
 	tcp->th_urp = 0;
+
+	if (state->flags & TCPR_HAVE_PEER_MSS) {
+		option[i++] = TCPOPT_MAXSEG;
+		option[i++] = 4;
+		option[i++] = state->peer_mss >> 8;
+		option[i++] = state->peer_mss & 0xff;
+	}
+
+	if (state->flags & TCPR_HAVE_PEER_WS) {
+		option[i++] = TCPOPT_WINDOW;
+		option[i++] = 3;
+		option[i++] = state->peer_ws;
+	}
+
+	if (i % 4)
+		option[i++] = TCPOPT_EOL;
+	tcp->th_off += (i + 3) / 4;
 }
 
 void tcpr_make_reset(struct tcphdr *tcp, struct tcpr_state *state)
@@ -195,6 +237,8 @@ int tcpr_handle_update(struct tcpr_state *state, struct tcpr_update *update)
 	if (update->ack != state->ack)
 		flags |= TCPR_UPDATE_ACK;
 
+	state->peer_mss = update->peer_mss;
+	state->peer_ws = update->peer_ws;
 	state->ack = update->ack;
 	state->delta = update->delta;
 	state->flags |= update->flags;
@@ -212,6 +256,8 @@ void tcpr_make_update(struct tcpr_update *update, struct tcpr_state *state)
 	update->peer_port = state->peer_port;
 	update->port = state->port;
 	update->peer_ack = state->peer_ack;
+	update->peer_mss = state->peer_mss;
+	update->peer_ws = state->peer_ws;
 	update->ack = state->ack;
 	update->delta = state->delta;
 	update->flags = state->flags & TCPR_HAVE_ACK;

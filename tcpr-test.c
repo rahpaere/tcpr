@@ -116,7 +116,7 @@ static void expect(uint32_t actual, uint32_t expected, const char *s)
 
 static uint32_t shorten(uint32_t n)
 {
-        return (n >> 16) + (n & 0xffff);
+	return (n >> 16) + (n & 0xffff);
 }
 
 static uint32_t checksum(uint16_t *data, size_t size)
@@ -308,6 +308,7 @@ static void recv_update(uint32_t saddr, uint32_t daddr,
 				uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
+				uint16_t peer_mss, uint8_t peer_ws,
 				uint32_t delta, uint32_t flags)
 {
 	char packet[SNAPLEN];
@@ -351,6 +352,12 @@ static void recv_update(uint32_t saddr, uint32_t daddr,
 	expect(ntohs(update->tcpr.port), port, "Update port");
 	expect(ntohl(update->tcpr.peer_ack), peer_ack,
 		"Update peer acknowledgment");
+	if (flags & TCPR_HAVE_PEER_MSS)
+		expect(ntohs(update->tcpr.peer_mss), peer_mss,
+			"Update peer maximum segment size");
+	if (flags & TCPR_HAVE_PEER_WS)
+		expect(update->tcpr.peer_ws, peer_ws,
+			"Update peer window scaling");
 	expect(ntohl(update->tcpr.ack), ack,
 		"Update acknowledgment");
 	expect(update->tcpr.delta, delta, "Update delta");
