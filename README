@@ -32,11 +32,8 @@ and install TCPR.
   $ ./configure && make
   # make install
 
-Three programs are installed:
-
-  tcpr-netfilter  - the packet filter
-  tcpr-chat       - the demonstration program
-  tcpr-test       - the unit tests
+Two programs are installed: tcpr-netfilter, the packet filter, and
+tcpr-chat, the demonstration program.
 
 
 The demonstration program is able to function as either client or server,
@@ -110,14 +107,17 @@ Or, if they are the only ones, you can simply remove all filter rules:
   # iptables -F
 
 
-Whereas the demonstration program which uses the operating system's actual
-network stack, the unit tests employ a tunnel device in order to appear to
-be an entire network of separate machines, injecting manually-constructed
-packets to simulate various situations and run the filter through
-its paces.  To run the unit tests, create the tunnel device, give it a
-network of addresses, and establish the filter rules:
+Whereas the demonstration program which uses the operating system's
+actual network stack, the unit tests employ a tunnel device in order
+to appear to be an entire network of separate machines, injecting
+manually-constructed packets to simulate various situations and run
+the filter through its paces.  To be able to run the unit tests as an
+unprivileged user, create a tunnel device with the appropriate ownership:
 
-  # openvpn --mktun --dev tcpr-test --dev-type tun
+  # openvpn --mktun --dev tcpr-test --dev-type tun --user USERNAME
+
+Then, give it a network of addresses and establish the filter rules:
+
   # ip link set tcpr-test up
   # ip addr add 10.10.10.1/24 dev tcpr-test
   # iptables -A FORWARD -s 10.10.10.1/24 -j NFQUEUE
@@ -132,16 +132,16 @@ Now run the filter:
 
   # tcpr-netfilter -a 10.10.10.4 -f 10.10.10.3
 
-In its own terminal, run the tests:
+In another terminal, build and run the tests:
 
-  # tcpr-test
+  $ make check
 
-Each invocation will creates packet traces, not unlike those the filter
+Each invocation will create packet traces, not unlike those the filter
 leaves with the `-d' option, to aid in debugging should something fail.
 
-The test program cleans up after itself, so it can be run multiple times
-without restarting the filter.  When you are finished, kill the filter.
-To clean up, remove the tunnel device and filter rules:
+The tests clean up after themselves, so the suite can be run multiple
+times without restarting the filter.  When you are finished, kill
+the filter.  To clean up, remove the tunnel device and filter rules:
 
   # openvpn --rmtun --dev tcpr-test --dev-type tun
   # iptables -D FORWARD -s 10.10.10.1/24 -j NFQUEUE

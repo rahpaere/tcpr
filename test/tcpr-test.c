@@ -1,7 +1,8 @@
-#include <inttypes.h>
-#include <stdio.h>
+#include "test.h"
 
-#include "util.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 int main(int argc, char **argv)
 {
@@ -38,7 +39,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(net | 3, net | 4, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 1, 0, TCPR_HAVE_ACK);
+			0xcafebabe + 1, 0xdeadbeef + 1, 0, 0, 0, TCPR_HAVE_ACK);
 
 	fprintf(stderr, "Application: \"foo\"\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
@@ -121,7 +122,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
-			0xcafebabe + 5, 0xdeadbeef + 5,
+			0xcafebabe + 5, 0xdeadbeef + 5, 0, 0,
 			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
 
 	fprintf(stderr, "Application: ACK\n");
@@ -223,7 +224,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update (TIME_WAIT)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
-			0xcafebabe + 11, 0xdeadbeef + 10,
+			0xcafebabe + 11, 0xdeadbeef + 10, 0, 0,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
 
@@ -242,7 +243,7 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "     Filter: update (failure)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
-			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0);
+			net | 2, net | 5, 8888, 9999, 0, 0, 0, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 5, net | 3, 7777, 7777,
@@ -282,7 +283,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update (failure)\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
-			0xcafebabe + 5, 0, 0, 0);
+			0xcafebabe + 5, 0, 0, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 3, net | 5, 7777, 7777,
@@ -306,7 +307,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(net | 3, net | 5, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
-			0xcafebabe + 5, 0xdeadbeef + 5,
+			0xcafebabe + 5, 0xdeadbeef + 5, 0, 0,
 			(0xfeedbead + 1) - (0xcafebabe + 5), TCPR_HAVE_ACK);
 
 	fprintf(stderr, "Application: ACK\n");

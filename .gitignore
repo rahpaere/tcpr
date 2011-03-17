@@ -9,6 +9,7 @@ config.log
 config.status
 configure
 .deps
+.dirstamp
 Makefile
 Makefile.in
 *.o
