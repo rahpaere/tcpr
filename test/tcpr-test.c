@@ -14,32 +14,8 @@ int main(int argc, char **argv)
 	external_log = open_log("test-external.pcap");
 	internal_log = open_log("test-internal.pcap");
 
-	fprintf(stderr, "       Peer: SYN\n");
-	send_segment(external_log, net | 2, net | 3, 8888, 9999,
-			TH_SYN, 0xdeadbeef, 0, 0, NULL, 0, NULL);
-	recv_segment(internal_log, net | 2, net | 4, 8888, 9999,
-			TH_SYN, 0xdeadbeef, 0, 0, NULL, 0, NULL);
-
-	fprintf(stderr, "Application: SYN ACK\n");
-	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
-			TH_SYN | TH_ACK, 0xcafebabe, 0xdeadbeef + 1,
-			0, NULL, 0, NULL);
-	recv_segment(external_log, net | 3, net | 2, 9999, 8888,
-			TH_SYN | TH_ACK, 0xcafebabe, 0xdeadbeef + 1,
-			0, NULL, 0, NULL);
-
-	fprintf(stderr, "       Peer: ACK\n");
-	send_segment(external_log, net | 2, net | 3, 8888, 9999,
-			TH_ACK, 0xdeadbeef + 1, 0xcafebabe + 1,
-			0, NULL, 0, NULL);
-	recv_segment(internal_log, net | 2, net | 4, 8888, 9999,
-			TH_ACK, 0xdeadbeef + 1, 0xcafebabe + 1,
-			0, NULL, 0, NULL);
-
-	fprintf(stderr, "     Filter: update\n");
-	recv_update(net | 3, net | 4, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 1, 0, 0, 0, TCPR_HAVE_ACK);
+	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 7777, 
+						7777, 0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);
 
 	fprintf(stderr, "Application: \"foo\"\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
@@ -228,8 +204,7 @@ int main(int argc, char **argv)
 			(0xfeedbead + 1) - (0xcafebabe + 5),
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
 
-	fprintf(stderr, "Application: update (remove state)\n");
-	send_update(net | 5, net | 3, 7777, 7777,
+	teardown_connection(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xcafebabe + 11, 0xdeadbeef + 10,
 			(0xfeedbead + 1) - (0xcafebabe + 5),
@@ -263,8 +238,7 @@ int main(int argc, char **argv)
 			TH_ACK, 0xbeefbead, 0xbabedeed - 4,
 			0, NULL, 2, "a");
 
-	fprintf(stderr, "Application: update (remove state)\n");
-	send_update(net | 5, net | 3, 7777, 7777,
+	teardown_connection(net | 5, net | 3, 7777, 7777,
 			net | 2, net | 5, 8888, 9999,
 			0xbeefbead, 0xbabedeed - 4, 0,
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
