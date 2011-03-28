@@ -28,10 +28,12 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 		case TCPOPT_MAXSEG:
 			state->peer_mss = (uint16_t)option[2] << 8 | option[1];
 			state->flags |= TCPR_HAVE_PEER_MSS;
+			option += option[1];
 			break;
 		case TCPOPT_WINDOW:
 			state->peer_ws = option[2];
 			state->flags |= TCPR_HAVE_PEER_WS;
+			option += option[1];
 			break;
 		case TCPOPT_TIMESTAMP:
 			option += option[1];
