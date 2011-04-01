@@ -33,6 +33,7 @@ struct update {
 struct segment {
 	struct ip ip;
 	struct tcphdr tcp;
+	uint8_t options[40];
 };
 
 struct datagram {
@@ -332,9 +333,9 @@ static void make_packet(struct ip *ip, uint16_t size,
 static void inject_acknowledgment(struct state *state)
 {
 	struct segment s;
-	make_packet(&s.ip, sizeof(s), external_address, state->peer_address,
-			IPPROTO_TCP);
 	tcpr_make_acknowledgment(&s.tcp, &state->tcpr);
+	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
+			external_address, state->peer_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, external_log);
@@ -343,9 +344,9 @@ static void inject_acknowledgment(struct state *state)
 static void inject_handshake(struct state *state)
 {
 	struct segment s;
-	make_packet(&s.ip, sizeof(s), state->peer_address, internal_address,
-			IPPROTO_TCP);
 	tcpr_make_handshake(&s.tcp, &state->tcpr);
+	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
+			state->peer_address, internal_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, internal_log);
@@ -354,9 +355,9 @@ static void inject_handshake(struct state *state)
 static void inject_reset(struct state *state)
 {
 	struct segment s;
-	make_packet(&s.ip, sizeof(s), state->peer_address, internal_address,
-			IPPROTO_TCP);
 	tcpr_make_reset(&s.tcp, &state->tcpr);
+	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
+			state->peer_address, internal_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, internal_log);
@@ -365,8 +366,6 @@ static void inject_reset(struct state *state)
 static void inject_update(struct state *state)
 {
 	struct datagram s;
-	make_packet(&s.ip, sizeof(s), external_address, internal_address,
-			IPPROTO_UDP);
 	s.udp.uh_sport = external_port;
 	s.udp.uh_dport = internal_port;
 	s.udp.uh_ulen = htons(sizeof(s.udp) + sizeof(s.update));
@@ -374,6 +373,8 @@ static void inject_update(struct state *state)
 	s.update.peer_address = state->peer_address;
 	s.update.address = internal_address;
 	tcpr_make_update(&s.update.tcpr, &state->tcpr);
+	make_packet(&s.ip, sizeof(s), external_address, internal_address,
+			IPPROTO_UDP);
 	compute_ip_checksum(&s.ip);
 	compute_udp_checksum(&s.ip, &s.udp);
 	inject(&s.ip, internal_log);
