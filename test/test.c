@@ -404,3 +404,39 @@ void teardown_connection(uint32_t saddr, uint32_t daddr,
 			peer_address, address, peer_port, port,
 			peer_ack, ack, delta, flags);
 }
+
+void setup_test(char *device, char *log_name) {
+	char *external_log_suffix = "-external.pcap";
+	char *internal_log_suffix = "-internal.pcap";
+
+	char *external_log_name = (char *) malloc (strlen(log_name) + strlen(external_log_suffix) + 1);
+	char *internal_log_name = (char *) malloc (strlen(log_name) + strlen(internal_log_suffix) + 1);
+
+	strcpy(external_log_name, log_name);
+   	strcat(external_log_name, external_log_suffix);
+
+	strcpy(internal_log_name, log_name);
+   	strcat(internal_log_name, internal_log_suffix);
+
+	tun = open_tun(device);
+	external_log = open_log(external_log_name);
+	internal_log = open_log(internal_log_name);
+
+	free(external_log_name);
+	free(internal_log_name);
+}
+
+void cleanup_test() {
+	if (fclose(external_log)) {
+		perror("Closing external log file");
+		exit(EXIT_FAILURE);
+	}
+	if (fclose(internal_log)) {
+		perror("Closing internal log file");
+		exit(EXIT_FAILURE);
+	}
+	if (close(tun)) {
+		perror("Closing TUN device");
+		exit(EXIT_FAILURE);
+	}
+}

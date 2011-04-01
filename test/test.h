@@ -81,3 +81,8 @@ void teardown_connection(uint32_t saddr, uint32_t daddr,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
 				uint32_t delta, uint32_t flags);
+
+
+void setup_test(char *device, char *log_name);
+
+void cleanup_test();
