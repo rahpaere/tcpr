@@ -67,3 +67,22 @@ void recv_update(uint32_t saddr, uint32_t daddr,
 				uint32_t peer_ack, uint32_t ack,
 				uint16_t peer_mss, uint8_t peer_ws,
 				uint32_t delta, uint32_t flags);
+
+void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
+				uint16_t sport, uint16_t dport, 
+				uint32_t update_sport, uint32_t update_dport,
+				uint32_t start_seq, uint32_t start_ack,
+				size_t options_size, const char *options,
+				uint16_t peer_mss, uint8_t peer_ws);
+
+void teardown_connection(uint32_t saddr, uint32_t daddr,
+				uint16_t sport, uint16_t dport,
+				uint32_t peer_address, uint32_t address,
+				uint16_t peer_port, uint16_t port,
+				uint32_t peer_ack, uint32_t ack,
+				uint32_t delta, uint32_t flags);
+
+
+void setup_test(char *device, char *log_name);
+
+void cleanup_test();

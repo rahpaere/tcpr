@@ -357,3 +357,86 @@ void recv_update(uint32_t saddr, uint32_t daddr,
 	expect(update->tcpr.delta, delta, "Update delta");
 	expect(update->tcpr.flags, flags, "Update flags");
 }
+
+void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
+						uint16_t sport, uint16_t dport, 
+						uint32_t update_sport, uint32_t update_dport,
+						uint32_t start_seq, uint32_t start_ack,
+						size_t options_size, const char *options,
+						uint16_t peer_mss, uint8_t peer_ws) {
+
+	fprintf(stderr, "       Peer: SYN\n");
+	send_segment(external_log, saddr, faddr, sport, dport,
+			TH_SYN, start_seq, 0, options_size, options, 0, NULL);
+	recv_segment(internal_log, saddr, daddr, sport, dport,
+			TH_SYN, start_seq, 0, options_size, options, 0, NULL);
+
+	fprintf(stderr, "Application: SYN ACK\n");
+	send_segment(internal_log, daddr, saddr, dport, sport,
+			TH_SYN | TH_ACK, start_ack, start_seq + 1,
+			0, NULL, 0, NULL);
+	recv_segment(external_log, faddr, saddr, dport, sport,
+			TH_SYN | TH_ACK, start_ack, start_seq + 1,
+			0, NULL, 0, NULL);
+
+	fprintf(stderr, "       Peer: ACK\n");
+	send_segment(external_log, saddr, faddr, sport, dport,
+			TH_ACK, start_seq + 1, start_ack + 1,
+			0, NULL, 0, NULL);
+	recv_segment(internal_log, saddr, daddr, sport, dport,
+			TH_ACK, start_seq + 1, start_ack + 1,
+			0, NULL, 0, NULL);
+
+	fprintf(stderr, "     Filter: update\n");
+	recv_update(faddr, daddr, update_sport, update_dport,
+			saddr, daddr, sport, dport,
+			start_ack + 1, start_seq + 1, peer_mss, peer_ws, 0, TCPR_HAVE_ACK);
+}
+
+void teardown_connection(uint32_t saddr, uint32_t daddr,
+							uint16_t sport, uint16_t dport,
+							uint32_t peer_address, uint32_t address,
+							uint16_t peer_port, uint16_t port,
+							uint32_t peer_ack, uint32_t ack,
+							uint32_t delta, uint32_t flags) {
+	fprintf(stderr, "Application: update (remove state)\n");
+	send_update(saddr, daddr, sport, dport,
+			peer_address, address, peer_port, port,
+			peer_ack, ack, delta, flags);
+}
+
+void setup_test(char *device, char *log_name) {
+	char *external_log_suffix = "-external.pcap";
+	char *internal_log_suffix = "-internal.pcap";
+
+	char *external_log_name = (char *) malloc (strlen(log_name) + strlen(external_log_suffix) + 1);
+	char *internal_log_name = (char *) malloc (strlen(log_name) + strlen(internal_log_suffix) + 1);
+
+	strcpy(external_log_name, log_name);
+   	strcat(external_log_name, external_log_suffix);
+
+	strcpy(internal_log_name, log_name);
+   	strcat(internal_log_name, internal_log_suffix);
+
+	tun = open_tun(device);
+	external_log = open_log(external_log_name);
+	internal_log = open_log(internal_log_name);
+
+	free(external_log_name);
+	free(internal_log_name);
+}
+
+void cleanup_test() {
+	if (fclose(external_log)) {
+		perror("Closing external log file");
+		exit(EXIT_FAILURE);
+	}
+	if (fclose(internal_log)) {
+		perror("Closing internal log file");
+		exit(EXIT_FAILURE);
+	}
+	if (close(tun)) {
+		perror("Closing TUN device");
+		exit(EXIT_FAILURE);
+	}
+}
