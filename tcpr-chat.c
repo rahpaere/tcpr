@@ -488,7 +488,7 @@ int main(int argc, char **argv)
 				"Connect to HOST at PORT.\n");
 			fprintf(stderr, "  -a PATH         "
 				"Receive updates at the UNIX socket PATH.\n");
-			fprintf(stderr, "  -f HOST:[PORT]  "
+			fprintf(stderr, "  -f PATH         "
 				"Send updates to the UNIX socket PATH.\n");
 			fprintf(stderr, "  -s FILE         "
 				"Keep persistent state in FILE.\n");
