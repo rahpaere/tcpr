@@ -14,9 +14,11 @@ Makefile
 Makefile.in
 *.o
 *.pcap
+*.socket
 stamp-h1
-state.log
 *.swp
 *.tar.*
+tcpr-application.state
 tcpr-chat
 tcpr-netfilter
+tcpr-state.log

@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -17,17 +19,16 @@ struct update {
 	struct tcpr_update tcpr;
 };
 
-static const char *application_host;
-static const char *application_port;
 static const char *bind_host;
 static const char *bind_port;
 static const char *connect_host;
 static const char *connect_port;
-static const char *filter_host;
-static const char *filter_port;
-static const char *state_file;
+static const char *filter_path = "tcpr-filter.socket";
+static const char *application_path = "tcpr-application.socket";
+static const char *state_file = "tcpr-application.state";
+static struct sockaddr_un filter_address;
 static int recovering;
-static int filtering;
+static int filtering = 1;
 
 static int data_socket;
 static int update_socket;
@@ -80,8 +81,11 @@ static void *read_from_peer(void *arg)
 			if (filtering) {
 				state->tcpr.ack = htonl(ntohl(state->tcpr.ack)
 								+ bytes);
-				if (write(update_socket, state,
-						sizeof(*state)) < 0) {
+				if (sendto(update_socket, state,
+						sizeof(*state), 0,
+						(struct sockaddr *)
+						&filter_address,
+						sizeof(filter_address)) < 0) {
 					perror("Sending acknowledgment");
 					exit(EXIT_FAILURE);
 				}
@@ -98,7 +102,9 @@ static void *read_from_peer(void *arg)
 		pthread_mutex_lock(&flags_lock);
 		state->tcpr.flags |= TCPR_DONE_READING;
 		pthread_mutex_unlock(&flags_lock);
-		if (write(update_socket, state, sizeof(*state)) < 0) {
+		if (sendto(update_socket, state, sizeof(*state), 0,
+				(struct sockaddr *)&filter_address,
+				sizeof(filter_address)) < 0) {
 			perror("Sending input shutdown");
 			exit(EXIT_FAILURE);
 		}
@@ -144,8 +150,10 @@ static void *send_to_peer(void *arg)
 		pthread_mutex_lock(&flags_lock);
 		state->tcpr.flags |= TCPR_DONE_WRITING;
 		pthread_mutex_unlock(&flags_lock);
-		if (write(update_socket, state, sizeof(*state)) < 0) {
-			perror("Sending output shutdown");
+		if (sendto(update_socket, state, sizeof(*state), 0,
+				(struct sockaddr *)&filter_address,
+				sizeof(filter_address)) < 0) {
+			perror("Sending input shutdown");
 			exit(EXIT_FAILURE);
 		}
 	}
@@ -189,18 +197,22 @@ static void *read_updates(void *arg)
 		clock_gettime(CLOCK_REALTIME, &timestamp);
 		if (!update.tcpr.flags) {
 			message("Filter needs recovery.");
-			if (write(update_socket, state, sizeof(*state)) < 0) {
+			if (sendto(update_socket, state, sizeof(*state), 0,
+					(struct sockaddr *)&filter_address,
+					sizeof(filter_address)) < 0) {
 				perror("Sending state");
 				exit(EXIT_FAILURE);
 			}
 			message_now("Sent state to filter.");
 		} else if (update.tcpr.flags & TCPR_TIME_WAIT) {
 			message("Entering TIME_WAIT.");
+			/*  FIXME: wait for lagging packets */
 			pthread_mutex_lock(&flags_lock);
-			state->tcpr.flags |= TCPR_TIME_WAIT;
+			state->tcpr.flags |= TCPR_FINISHED;
 			pthread_mutex_unlock(&flags_lock);
-			/*  FIXME: should TIME_WAIT for safety */
-			if (write(update_socket, state, sizeof(*state)) < 0) {
+			if (sendto(update_socket, state, sizeof(*state), 0,
+					(struct sockaddr *)&filter_address,
+					sizeof(filter_address)) < 0) {
 				perror("Removing filter state");
 				exit(EXIT_FAILURE);
 			}
@@ -246,46 +258,28 @@ static void setup_state(void)
 
 static void setup_update_connection(void)
 {
-	int ret;
-	struct addrinfo *ai;
-	struct addrinfo hints;
+	struct sockaddr_un addr;
 
 	message_now("Establishing update connection.");
 
-	update_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
 	if (update_socket < 0) {
 		perror("Creating update socket");
 		exit(EXIT_FAILURE);
 	}
 
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_protocol = IPPROTO_UDP;
-
-	ret = getaddrinfo(application_host, application_port, &hints, &ai);
-	if (ret) {
-		fprintf(stderr, "Resolving application address: %s\n",
-				gai_strerror(ret));
-		exit(EXIT_FAILURE);
-	}
-	if (bind(update_socket, ai->ai_addr, ai->ai_addrlen) < 0) {
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, application_path, sizeof(addr.sun_path) - 1);
+	unlink(application_path);
+	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		perror("Binding update socket");
 		exit(EXIT_FAILURE);
 	}
-	freeaddrinfo(ai);
 
-	ret = getaddrinfo(filter_host, filter_port, &hints, &ai);
-	if (ret) {
-		fprintf(stderr, "Resolving filter address: %s\n",
-				gai_strerror(ret));
-		exit(EXIT_FAILURE);
-	}
-	if (connect(update_socket, ai->ai_addr, ai->ai_addrlen) < 0) {
-		perror("Connecting update socket");
-		exit(EXIT_FAILURE);
-	}
-	freeaddrinfo(ai);
+	memset(&filter_address, 0, sizeof(filter_address));
+	filter_address.sun_family = AF_UNIX;
+	strncpy(filter_address.sun_path, filter_path,
+		sizeof(filter_address.sun_path) - 1);
 
 	pthread_create(&update_thread, NULL, read_updates, NULL);
 }
@@ -429,6 +423,7 @@ static void finish(void)
 			perror("Closing update connection");
 			exit(EXIT_FAILURE);
 		}
+		unlink(application_path);
 
 		message_now("Removing persistent state.");
 		if (munmap(state, sizeof(*state)) < 0) {
@@ -465,7 +460,7 @@ int main(int argc, char **argv)
 {
 	int opt;
 
-	while ((opt = getopt(argc, argv, "b:c:a:f:s:?")) != -1)
+	while ((opt = getopt(argc, argv, "b:c:a:f:s:p?")) != -1)
 		switch (opt) {
 		case 'b':
 			split_address(optarg, &bind_host, &bind_port);
@@ -474,27 +469,31 @@ int main(int argc, char **argv)
 			split_address(optarg, &connect_host, &connect_port);
 			break;
 		case 'a':
-			split_address(optarg, &application_host,
-						&application_port);
+			application_path = optarg;
 			break;
 		case 'f':
-			split_address(optarg, &filter_host, &filter_port);
+			filter_path = optarg;
 			break;
 		case 's':
 			state_file = optarg;
 			break;
+		case 'p':
+			filtering = 0;
+			break;
 		default:
 			fprintf(stderr, "Usage: %s [OPTIONS]\n", argv[0]);
 			fprintf(stderr, "  -b HOST:[PORT]  "
-				"Bind to the specified address.\n");
+				"Bind to HOST at PORT.\n");
 			fprintf(stderr, "  -c HOST:[PORT]  "
-				"Connect to the specified address.\n");
-			fprintf(stderr, "  -a HOST:[PORT]  "
-				"Receive updates at the specified address.\n");
+				"Connect to HOST at PORT.\n");
+			fprintf(stderr, "  -a PATH         "
+				"Receive updates at the UNIX socket PATH.\n");
 			fprintf(stderr, "  -f HOST:[PORT]  "
-				"Send updates to the specified address.\n");
+				"Send updates to the UNIX socket PATH.\n");
 			fprintf(stderr, "  -s FILE         "
 				"Keep persistent state in FILE.\n");
+			fprintf(stderr, "  -p              "
+				"Act as the peer; i.e. ignore TCPR.\n");
 			fprintf(stderr, "  -?              "
 				"Print this help message and exit.\n");
 			exit(EXIT_FAILURE);
@@ -505,17 +504,7 @@ int main(int argc, char **argv)
 	if (!bind_port && (bind_host || !connect_port))
 		bind_port = "8888";
 
-	if (filter_host || filter_port) {
-		filtering = 1;
-		if (!filter_port)
-			filter_port = application_port
-					? application_port : "7777";
-		if (!application_port)
-			application_port = filter_port;
-		if (!application_host)
-			application_host = bind_host;
-		if (!state_file)
-			state_file = "tcpr-application.dat";
+	if (filtering) {
 		setup_state();
 		setup_update_connection();
 	}

@@ -15,6 +15,7 @@ enum tcpr_flags {
 	TCPR_DONE_WRITING = 0x40,
 	TCPR_HAVE_PEER_MSS = 0x80,
 	TCPR_HAVE_PEER_WS = 0x100,
+	TCPR_FINISHED = 0x200,
 };
 
 enum tcpr_result {
@@ -52,6 +53,7 @@ struct tcpr_update {
 	uint32_t peer_ack;
 	uint16_t peer_mss;
 	uint8_t peer_ws;
+	uint8_t padding;
 	uint32_t ack;
 	uint32_t delta;
 	uint32_t flags;

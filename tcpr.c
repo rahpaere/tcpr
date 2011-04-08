@@ -230,7 +230,7 @@ int tcpr_handle_update(struct tcpr_state *state, struct tcpr_update *update)
 {
 	int flags = 0;
 
-	if (update->flags & TCPR_TIME_WAIT)
+	if (update->flags & TCPR_FINISHED)
 		return TCPR_CLOSED;
 	if ((update->flags & TCPR_DONE_READING) &&
 			(state->flags & TCPR_HAVE_ACK))
