@@ -5,6 +5,7 @@
 #include <netdb.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include <sys/time.h>
 #include <sys/times.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -33,12 +35,7 @@ struct update {
 struct segment {
 	struct ip ip;
 	struct tcphdr tcp;
-};
-
-struct datagram {
-	struct ip ip;
-	struct udphdr udp;
-	struct update update;
+	uint8_t options[40];
 };
 
 struct log_header {
@@ -73,10 +70,10 @@ static unsigned long errors;
 static long ticks_per_second;
 
 static int raw_socket;
+static int update_socket;
 static uint32_t internal_address;
 static uint32_t external_address;
-static uint16_t internal_port;
-static uint16_t external_port;
+struct sockaddr_un application_address;
 
 static FILE *internal_log;
 static FILE *external_log;
@@ -98,51 +95,50 @@ static void log_packet(struct ip *ip, FILE *log)
 	fwrite(ip, size, 1, log);
 }
 
-static void log_state(struct state *s)
+static void log_state(struct state *state)
 {
 	struct timespec tp;
 
 	clock_gettime(CLOCK_REALTIME, &tp);
         fprintf(state_log, "%lf:\n",  (double)tp.tv_sec
                                         + (double)tp.tv_nsec / 1000000000.0);
-	fprintf(state_log, "Packet %lu:\n", packets - 1);
 	fprintf(state_log, "  Peer address:        %" PRIx32 "\n",
-						ntohl(s->peer_address));
+						ntohl(state->peer_address));
 	fprintf(state_log, "  Peer port:           %" PRIu16 "\n",
-						ntohs(s->tcpr.peer_port));
+						ntohs(state->tcpr.peer_port));
 	fprintf(state_log, "  Port:                %" PRIu16 "\n",
-						ntohs(s->tcpr.port));
-	if (s->tcpr.flags & TCPR_HAVE_PEER_ACK)
+						ntohs(state->tcpr.port));
+	if (state->tcpr.flags & TCPR_HAVE_PEER_ACK)
 		fprintf(state_log, "  Peer acknowledgment: %" PRIu32 "\n",
-						ntohl(s->tcpr.peer_ack));
+						ntohl(state->tcpr.peer_ack));
 	else
 		fprintf(state_log, "  Peer acknowledgment: None.\n");
-	if (s->tcpr.flags & TCPR_HAVE_PEER_FIN)
+	if (state->tcpr.flags & TCPR_HAVE_PEER_FIN)
 		fprintf(state_log, "  Peer final sequence: %" PRIu32 "\n",
-						ntohl(s->tcpr.peer_fin));
+						ntohl(state->tcpr.peer_fin));
 	else
 		fprintf(state_log, "  Peer final sequence: None.\n");
 	fprintf(state_log, "  Peer window:         %" PRIu16 "\n",
-						ntohs(s->tcpr.peer_win));
-	if (s->tcpr.flags & TCPR_HAVE_ACK)
+						ntohs(state->tcpr.peer_win));
+	if (state->tcpr.flags & TCPR_HAVE_ACK)
 		fprintf(state_log, "  Acknowledgment:      %" PRIu32 "\n",
-						ntohl(s->tcpr.ack));
+						ntohl(state->tcpr.ack));
 	else
 		fprintf(state_log, "  Acknowledgment:      None.\n");
-	if (s->tcpr.flags & TCPR_HAVE_FIN)
+	if (state->tcpr.flags & TCPR_HAVE_FIN)
 		fprintf(state_log, "  Final sequence:      %" PRIu32 "\n",
-						ntohl(s->tcpr.fin));
+						ntohl(state->tcpr.fin));
 	else
 		fprintf(state_log, "  Final sequence:      None.\n");
 	fprintf(state_log, "  Sequence:            %" PRIu32 "\n",
-						ntohl(s->tcpr.seq));
+						ntohl(state->tcpr.seq));
 	fprintf(state_log, "  Window:              %" PRIu16 "\n",
-						ntohs(s->tcpr.win));
+						ntohs(state->tcpr.win));
 	fprintf(state_log, "  Delta:               %" PRIu32 "\n",
-						s->tcpr.delta);
-	if (s->tcpr.flags & TCPR_DONE_READING)
+						state->tcpr.delta);
+	if (state->tcpr.flags & TCPR_DONE_READING)
 		fprintf(state_log, "  Done reading.\n");
-	if (s->tcpr.flags & TCPR_DONE_WRITING)
+	if (state->tcpr.flags & TCPR_DONE_WRITING)
 		fprintf(state_log, "  Done writing.\n");
 }
 
@@ -197,17 +193,7 @@ static void compute_tcp_checksum(struct ip *ip, struct tcphdr *tcp)
 	tcp->th_sum = ~shorten(shorten(sum));
 }
 
-static void compute_udp_checksum(struct ip *ip, struct udphdr *udp)
-{
-	uint32_t size = ntohs(ip->ip_len) - ip->ip_hl * 4;
-	uint32_t sum = checksum((uint16_t *)udp, size)
-			+ shorten(ip->ip_dst.s_addr)
-			+ shorten(ip->ip_src.s_addr)
-			+ htons(ip->ip_p + size);
-	udp->uh_sum = ~shorten(shorten(sum));
-}
-
-static struct state **get_bucket(uint32_t a, uint32_t b, uint32_t c)
+static struct state **hash(uint32_t a, uint32_t b, uint32_t c)
 {
 	static struct state *buckets[1 << 8];
 	/* <http://burtleburtle.net/bob/c/lookup3.c> */
@@ -221,10 +207,10 @@ static struct state **get_bucket(uint32_t a, uint32_t b, uint32_t c)
 	return &buckets[c & ((sizeof(buckets) / sizeof(*buckets)) - 1)];
 }
 
-static struct state *get_state(uint32_t peer_address, uint16_t peer_port,
+static struct state *lookup(uint32_t peer_address, uint16_t peer_port,
 				uint16_t port)
 {
-	struct state **bucket = get_bucket(peer_address, external_address,
+	struct state **bucket = hash(peer_address, external_address,
 						peer_port << 16 | port);
 	struct state *state;
 	for (state = *bucket; state; state = state->next)
@@ -247,7 +233,7 @@ static struct state *get_state(uint32_t peer_address, uint16_t peer_port,
 static void remove_state(uint32_t peer_address, uint16_t peer_port,
 				uint16_t port)
 {
-	struct state **bucket = get_bucket(peer_address, external_address,
+	struct state **bucket = hash(peer_address, external_address,
 						peer_port << 16 | port);
 	struct state *state;
 	for (state = *bucket; state; bucket = &state->next, state = *bucket)
@@ -332,9 +318,9 @@ static void make_packet(struct ip *ip, uint16_t size,
 static void inject_acknowledgment(struct state *state)
 {
 	struct segment s;
-	make_packet(&s.ip, sizeof(s), external_address, state->peer_address,
-			IPPROTO_TCP);
 	tcpr_make_acknowledgment(&s.tcp, &state->tcpr);
+	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
+			external_address, state->peer_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, external_log);
@@ -343,9 +329,9 @@ static void inject_acknowledgment(struct state *state)
 static void inject_handshake(struct state *state)
 {
 	struct segment s;
-	make_packet(&s.ip, sizeof(s), state->peer_address, internal_address,
-			IPPROTO_TCP);
 	tcpr_make_handshake(&s.tcp, &state->tcpr);
+	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
+			state->peer_address, internal_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, internal_log);
@@ -354,29 +340,123 @@ static void inject_handshake(struct state *state)
 static void inject_reset(struct state *state)
 {
 	struct segment s;
-	make_packet(&s.ip, sizeof(s), state->peer_address, internal_address,
-			IPPROTO_TCP);
 	tcpr_make_reset(&s.tcp, &state->tcpr);
+	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
+			state->peer_address, internal_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, internal_log);
 }
 
-static void inject_update(struct state *state)
+static void send_update(struct state *state)
 {
-	struct datagram s;
-	make_packet(&s.ip, sizeof(s), external_address, internal_address,
-			IPPROTO_UDP);
-	s.udp.uh_sport = external_port;
-	s.udp.uh_dport = internal_port;
-	s.udp.uh_ulen = htons(sizeof(s.udp) + sizeof(s.update));
-	s.udp.uh_sum = 0;
-	s.update.peer_address = state->peer_address;
-	s.update.address = internal_address;
-	tcpr_make_update(&s.update.tcpr, &state->tcpr);
-	compute_ip_checksum(&s.ip);
-	compute_udp_checksum(&s.ip, &s.udp);
-	inject(&s.ip, internal_log);
+	struct update update;
+	update.peer_address = state->peer_address;
+	update.address = internal_address;
+	tcpr_make_update(&update.tcpr, &state->tcpr);
+	if (sendto(update_socket, &update, sizeof(update), 0,
+			(struct sockaddr *)&application_address,
+			sizeof(application_address)) < 0)
+		perror("Sending update");
+}
+
+static void handle_update(struct update *update)
+{
+	struct state *state;
+	int flags;
+
+	internal_address = update->address;
+	++updates;
+
+	state = lookup(update->peer_address, update->tcpr.peer_port,
+			update->tcpr.port);
+	if (!state)
+		return;
+
+	flags = tcpr_handle_update(&state->tcpr, &update->tcpr);
+	if (debugging)
+		log_state(state);
+	if (flags & TCPR_CLOSED) {
+		remove_state(update->peer_address,
+				update->tcpr.peer_port,
+				update->tcpr.port);
+		return;
+	}
+	if (flags & update_flags)
+		send_update(state);
+	if (flags & TCPR_UPDATE_ACK)
+		inject_acknowledgment(state);
+}
+
+static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
+				  struct nfq_data *d, void *a)
+{
+	int flags;
+	int id;
+	struct ip *ip;
+	struct state *state;
+	struct tcphdr *tcp;
+
+	(void)m;
+	(void)a;
+
+	id = ntohl((nfq_get_msg_packet_hdr(d))->packet_id);
+	nfq_get_payload(d, (char **)&ip);
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ip_hl);
+	++segments;
+
+	if (ip->ip_dst.s_addr == external_address) {
+		if (debugging)
+			log_packet(ip, external_log);
+		state = lookup(ip->ip_src.s_addr, tcp->th_sport, tcp->th_dport);
+		if (!state) {
+			++errors;
+			drop(q, id);
+			return 0;
+		}
+
+		flags = tcpr_handle_segment_from_peer(&state->tcpr, tcp,
+					htons(ip->ip_len) - ip->ip_hl * 4);
+		if (debugging)
+			log_state(state);
+		if (flags & drop_flags) {
+			drop(q, id);
+		} else {
+			set_internal_destination(ip, tcp);
+			deliver(q, id, ip, tcp, internal_log);
+		}
+		if (flags & update_flags)
+			send_update(state);
+		return 0;
+        } else {
+		if (debugging)
+			log_packet(ip, internal_log);
+		internal_address = ip->ip_src.s_addr;
+		state = lookup(ip->ip_dst.s_addr, tcp->th_dport, tcp->th_sport);
+		if (!state) {
+			++errors;
+			drop(q, id);
+			return 0;
+		}
+
+		flags = tcpr_handle_segment(&state->tcpr, tcp,
+					htons(ip->ip_len) - ip->ip_hl * 4);
+		if (debugging)
+			log_state(state);
+		if (flags & drop_flags) {
+			drop(q, id);
+		} else {
+			set_external_source(ip, tcp);
+			deliver(q, id, ip, tcp, external_log);
+		}
+		if (flags & TCPR_SPURIOUS_FIN)
+			inject_reset(state);
+		if (flags & TCPR_RECOVERY)
+			inject_handshake(state);
+		if (flags & update_flags)
+			send_update(state);
+		return 0;
+	}
 }
 
 static int passthrough(struct nfq_q_handle *q, struct nfgenmsg *m,
@@ -397,136 +477,19 @@ static int passthrough(struct nfq_q_handle *q, struct nfgenmsg *m,
 	return 0;
 }
 
-static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
-				  struct nfq_data *d, void *a)
-{
-	int flags;
-	int id;
-	struct ip *ip;
-	struct state *s;
-	struct tcphdr *tcp;
-	struct udphdr *udp;
-	struct update *update;
-
-	(void)m;
-	(void)a;
-
-	id = ntohl((nfq_get_msg_packet_hdr(d))->packet_id);
-	nfq_get_payload(d, (char **)&ip);
-
-	if (ip->ip_p == IPPROTO_UDP) {
-		if (debugging)
-			log_packet(ip, internal_log);
-		++updates;
-		udp = (struct udphdr *)((uint32_t *)ip + ip->ip_hl);
-		update = (struct update *)(udp + 1);
-		s = get_state(update->peer_address, update->tcpr.peer_port,
-				update->tcpr.port);
-		if (!s) {
-			++errors;
-			drop(q, id);
-			return 0;
-		}
-
-		internal_address = update->address;
-		flags = tcpr_handle_update(&s->tcpr, &update->tcpr);
-		if (debugging)
-			log_state(s);
-		drop(q, id);
-		if (flags & TCPR_CLOSED) {
-			remove_state(update->peer_address,
-					update->tcpr.peer_port,
-					update->tcpr.port);
-			return 0;
-		}
-		if (flags & update_flags)
-			inject_update(s);
-		if (flags & TCPR_UPDATE_ACK)
-			inject_acknowledgment(s);
-		return 0;
-        }
-
-	++segments;
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ip_hl);
-	if (ip->ip_dst.s_addr == external_address) {
-		if (debugging)
-			log_packet(ip, external_log);
-		s = get_state(ip->ip_src.s_addr, tcp->th_sport, tcp->th_dport);
-		if (!s) {
-			++errors;
-			drop(q, id);
-			return 0;
-		}
-
-		flags = tcpr_handle_segment_from_peer(&s->tcpr, tcp,
-					htons(ip->ip_len) - ip->ip_hl * 4);
-		if (debugging)
-			log_state(s);
-		if (flags & drop_flags) {
-			drop(q, id);
-		} else {
-			set_internal_destination(ip, tcp);
-			deliver(q, id, ip, tcp, internal_log);
-		}
-		if (flags & update_flags)
-			inject_update(s);
-		return 0;
-        } else {
-		if (debugging)
-			log_packet(ip, internal_log);
-		internal_address = ip->ip_src.s_addr;
-		s = get_state(ip->ip_dst.s_addr, tcp->th_dport, tcp->th_sport);
-		if (!s) {
-			++errors;
-			drop(q, id);
-			return 0;
-		}
-
-		flags = tcpr_handle_segment(&s->tcpr, tcp,
-					htons(ip->ip_len) - ip->ip_hl * 4);
-		if (debugging)
-			log_state(s);
-		if (flags & drop_flags) {
-			drop(q, id);
-		} else {
-			set_external_source(ip, tcp);
-			deliver(q, id, ip, tcp, external_log);
-		}
-		if (flags & TCPR_SPURIOUS_FIN)
-			inject_reset(s);
-		if (flags & TCPR_RECOVERY)
-			inject_handshake(s);
-		if (flags & update_flags)
-			inject_update(s);
-		return 0;
-	}
-}
-
 static void terminate(int s)
 {
 	(void)s;
 }
 
-static void split_address(char *address, const char **host, const char **port)
-{
-	char *tmp = strrchr(address, ':');
-	if (tmp) {
-		*tmp++ = '\0';
-		*port = *tmp ? tmp : NULL;
-	} else {
-		*port = NULL;
-	}
-	*host = *address ? address : NULL;
-}
-
 int main(int argc, char **argv)
 {
-	const char *filter_host = NULL;
-	const char *filter_port = NULL;
-	const char *application_host = NULL;
-	const char *application_port = NULL;
+	const char *external_host = NULL;
+	const char *internal_host = NULL;
+	const char *filter_path = "tcpr-filter.socket";
+	const char *application_path = "tcpr-application.socket";
 	char packet[65536];
-	int fd;
+	int netfilter_fd;
 	int ret;
 	nfq_callback *handler = handle_packet;
 	ssize_t size;
@@ -539,15 +502,23 @@ int main(int argc, char **argv)
 	unsigned long statistics_at_end = 0;
 	struct sigaction sa;
 	struct sigaction old;
+	struct sockaddr_un addr;
+	struct pollfd fds[2];
+	struct update update;
 
-	while ((ret = getopt(argc, argv, "a:f:s:dp?")) != -1)
+	while ((ret = getopt(argc, argv, "i:e:a:f:s:dp?")) != -1)
 		switch (ret) {
+		case 'i':
+			internal_host = optarg;
+			break;
+		case 'e':
+			external_host = optarg;
+			break;
 		case 'a':
-			split_address(optarg, &application_host,
-						&application_port);
+			application_path = optarg;
 			break;
 		case 'f':
-			split_address(optarg, &filter_host, &filter_port);
+			filter_path = optarg;
 			break;
 		case 's':
 			statistics_interval = (unsigned)atol(optarg);
@@ -561,30 +532,31 @@ int main(int argc, char **argv)
 			break;
 		default:
 			fprintf(stderr, "Usage: %s [OPTIONS]\n", argv[0]);
-			fprintf(stderr, "  -a HOST:[PORT]  "
-				"Send updates to the specified address.\n");
-			fprintf(stderr, "  -f HOST:[PORT]  "
-				"Receive updates at the specified address.\n");
-			fprintf(stderr, "  -s INTERVAL     "
+			fprintf(stderr, "  -i HOST      "
+				"Let HOST be the application's "
+				"internal address.\n");
+			fprintf(stderr, "  -e HOST      "
+				"Map the application's address "
+				"to HOST externally.\n");
+			fprintf(stderr, "  -a PATH      "
+				"Send updates to the UNIX socket PATH.\n");
+			fprintf(stderr, "  -f PATH      "
+				"Receive updates at the UNIX socket PATH.\n");
+			fprintf(stderr, "  -s INTERVAL  "
 				"Print statistics every INTERVAL packets.\n");
-			fprintf(stderr, "  -d              "
+			fprintf(stderr, "  -d           "
 				"Print debugging messages and write logs.\n");
-			fprintf(stderr, "  -p              "
+			fprintf(stderr, "  -p           "
 				"Pass packets through without processing.\n");
-			fprintf(stderr, "  -?              "
+			fprintf(stderr, "  -?           "
 				"Print this help message and exit.\n");
 			exit(EXIT_FAILURE);
 		}
 
-	if (!filter_port)
-		filter_port = application_port ? application_port : "7777";
-	if (!application_port)
-		application_port = filter_port;
-
 	ticks_per_second = sysconf(_SC_CLK_TCK);
 
 	if (debugging) {
-		state_log = fopen("state.log", "w");
+		state_log = fopen("tcpr-state.log", "w");
 		if (!state_log) {
 			perror("Opening state log");
 			exit(EXIT_FAILURE);
@@ -598,7 +570,7 @@ int main(int argc, char **argv)
 		log_header.caplen = sizeof(packet);
 		log_header.network = 101;
 
-		internal_log = fopen("internal.pcap", "w");
+		internal_log = fopen("tcpr-internal.pcap", "w");
 		if (!internal_log) {
 			perror("Opening internal log");
 			exit(EXIT_FAILURE);
@@ -606,7 +578,7 @@ int main(int argc, char **argv)
 		fwrite(&log_header, sizeof(log_header), 1, internal_log);
 		fflush(internal_log);
 
-		external_log = fopen("external.pcap", "w");
+		external_log = fopen("tcpr-external.pcap", "w");
 		if (!external_log) {
 			perror("Opening external log");
 			exit(EXIT_FAILURE);
@@ -617,30 +589,41 @@ int main(int argc, char **argv)
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_protocol = IPPROTO_UDP;
-	ret = getaddrinfo(application_host, application_port, &hints, &ai);
+
+	ret = getaddrinfo(internal_host, NULL, &hints, &ai);
 	if (ret) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
 		exit(EXIT_FAILURE);
 	}
 	internal_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
-	internal_port = ((struct sockaddr_in *)ai->ai_addr)->sin_port;
 	freeaddrinfo(ai);
-	ret = getaddrinfo(filter_host, filter_port, &hints, &ai);
+
+	ret = getaddrinfo(external_host, NULL, &hints, &ai);
 	if (ret) {
 		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
 		exit(EXIT_FAILURE);
 	}
 	external_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
-	external_port = ((struct sockaddr_in *)ai->ai_addr)->sin_port;
 	freeaddrinfo(ai);
 
-	raw_socket = socket(PF_INET, SOCK_RAW, IPPROTO_RAW);
-	if (raw_socket < 0) {
-		perror("Opening raw socket");
+	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (update_socket < 0) {
+		perror("Opening update socket");
 		exit(EXIT_FAILURE);
 	}
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, filter_path, sizeof(addr.sun_path) - 1);
+	unlink(filter_path);
+	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("Binding update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&application_address, 0, sizeof(application_address));
+	application_address.sun_family = AF_UNIX;
+	strncpy(application_address.sun_path, application_path,
+		sizeof(application_address.sun_path) - 1);
 
 	h = nfq_open();
 	if (!h) {
@@ -662,6 +645,12 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
+	raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+	if (raw_socket < 0) {
+		perror("Opening raw socket");
+		exit(EXIT_FAILURE);
+	}
+
 	memset(&sa, 0, sizeof(sa));
 	memset(&old, 0, sizeof(old));
 	sa.sa_handler = terminate;
@@ -670,24 +659,55 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	fd = nfq_fd(h);
+	netfilter_fd = nfq_fd(h);
+
+	fds[0].fd = update_socket;
+	fds[0].events = POLLIN;
+	fds[1].fd = netfilter_fd;
+	fds[1].events = POLLIN;
 	for (;;) {
-		size = read(fd, packet, sizeof(packet));
-		if (size < 0) {
+		if (poll(fds, sizeof(fds) / sizeof(fds[0]), -1) < 0) {
 			if (errno == EINTR)
 				break;
-			perror("Reading packet");
-			++errors;
-		} else {
-			++packets;
-			nfq_handle_packet(h, packet, size);
+			perror("Polling for input");
+			exit(EXIT_FAILURE);
 		}
-		if (statistics_interval && packets % statistics_interval == 0)
-			log_statistics();
+
+		if (fds[0].revents & POLLIN) {
+			if (read(update_socket, &update, sizeof(update)) < 0) {
+				if (errno == EINTR)
+					break;
+				perror("Reading update");
+				++errors;
+			} else {
+				handle_update(&update);
+			}
+		}
+
+		if (fds[1].revents & POLLIN) {
+			size = read(netfilter_fd, packet, sizeof(packet));
+			if (size < 0) {
+				if (errno == EINTR)
+					break;
+				perror("Reading packet");
+				++errors;
+			} else {
+				nfq_handle_packet(h, packet, size);
+				++packets;
+				if (statistics_interval && packets % statistics_interval == 0)
+					log_statistics();
+			}
+		}
 	}
 
 	if (statistics_at_end)
 		log_statistics();
+
+	if (close(update_socket) < 0) {
+		perror("Closing update socket");
+		exit(EXIT_FAILURE);
+	}
+	unlink(filter_path);
 
 	if (close(raw_socket) < 0) {
 		perror("Closing raw socket");
