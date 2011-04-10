@@ -86,3 +86,10 @@ void teardown_connection(uint32_t saddr, uint32_t daddr,
 void setup_test(char *device, char *log_name);
 
 void cleanup_test();
+
+void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
+				uint16_t sport, uint16_t dport, 
+				uint32_t update_sport, uint32_t update_dport,
+				uint32_t new_seq, uint32_t seq, uint32_t ack,
+				size_t options_size, const char *options,
+				uint16_t peer_mss, uint8_t peer_ws);

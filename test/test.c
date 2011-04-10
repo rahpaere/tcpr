@@ -440,3 +440,33 @@ void cleanup_test() {
 		exit(EXIT_FAILURE);
 	}
 }
+
+void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
+						uint16_t sport, uint16_t dport, 
+						uint32_t update_sport, uint32_t update_dport,
+						uint32_t new_seq, uint32_t seq, uint32_t ack,
+						size_t options_size, const char *options,
+						uint16_t peer_mss, uint8_t peer_ws) {
+	fprintf(stderr, "Application: SYN (recovery)\n");
+	send_segment(internal_log, saddr, daddr, sport, dport,
+			TH_SYN, new_seq, 0, options_size, options, 0, NULL);
+
+	fprintf(stderr, "     Filter: SYN ACK\n");
+	recv_segment(internal_log, daddr, saddr, dport, sport,
+			TH_SYN | TH_ACK, ack, new_seq + 1,
+			0, NULL, 0, NULL);
+
+	fprintf(stderr, "     Filter: update\n");
+	recv_update(faddr, saddr, update_sport, update_dport,
+			daddr, saddr, dport, sport,
+			seq + 1, ack + 1, peer_mss, peer_ws,
+			(new_seq + 1) - (seq + 1), TCPR_HAVE_ACK);
+
+	fprintf(stderr, "Application: ACK\n");
+	send_segment(internal_log, saddr, daddr, sport, dport,
+			TH_ACK, new_seq + 1, ack + 1,
+			0, NULL, 0, NULL);
+	recv_segment(external_log, faddr, daddr, sport, dport,
+			TH_ACK, seq + 1, ack + 1,
+			0, NULL, 0, NULL);
+}
