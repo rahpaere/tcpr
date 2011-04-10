@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 4, net | 3, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 5, 0, TCPR_HAVE_ACK);
+			0xcafebabe + 1, 0xdeadbeef + 5, 0, 0, 0, TCPR_HAVE_ACK);
 
 	fprintf(stderr, "     Filter: ACK\n");
 	recv_segment(external_log, net | 3, net | 2, 9999, 8888,

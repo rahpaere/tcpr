@@ -10,7 +10,7 @@ int main(int argc, char **argv)
 	(void)argv;
 	const uint32_t net = 0x0a0a0a00;
 
-	setup_test("tcpr-test", "test-failure-recovery");
+	setup_test("tcpr-test", "test-spurious-rsts");
 
 	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 7777, 
 						7777, 0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);

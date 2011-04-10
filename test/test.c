@@ -22,6 +22,11 @@ FILE *external_log;
 FILE *internal_log;
 int tun;
 
+uint8_t peer_ws;
+uint16_t peer_mss;
+size_t test_options_size;
+char* test_options; 
+
 int open_tun(char *device)
 {
 	int f;
@@ -252,6 +257,7 @@ void send_update(uint32_t saddr, uint32_t daddr,
 				uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
+				uint16_t peer_mss, uint8_t peer_ws,
 				uint32_t delta, uint32_t flags)
 {
 	char packet[SNAPLEN];
@@ -286,6 +292,8 @@ void send_update(uint32_t saddr, uint32_t daddr,
 	update->tcpr.port = htons(port);
 	update->tcpr.peer_ack = htonl(peer_ack);
 	update->tcpr.ack = htonl(ack);
+	update->tcpr.peer_mss = htonl(peer_mss);
+	update->tcpr.peer_ws = htonl(peer_ws);
 	update->tcpr.delta = delta;
 	update->tcpr.flags = flags;
 	compute_udp_checksum(ip, udp);
@@ -402,7 +410,7 @@ void teardown_connection(uint32_t saddr, uint32_t daddr,
 	fprintf(stderr, "Application: update (remove state)\n");
 	send_update(saddr, daddr, sport, dport,
 			peer_address, address, peer_port, port,
-			peer_ack, ack, delta, flags);
+			peer_ack, ack, 0, 0, delta, flags);
 }
 
 void setup_test(char *device, char *log_name) {
@@ -424,6 +432,14 @@ void setup_test(char *device, char *log_name) {
 
 	free(external_log_name);
 	free(internal_log_name);
+
+	test_options_size = 8;
+	peer_mss = 0x0640;
+	peer_ws = 0x02;
+
+	test_options = (char *) malloc(test_options_size);
+	*((uint32_t *)test_options) = htonl(0x02040000 | peer_mss);
+	*((uint32_t *)(test_options+4)) = htonl(0x03030000 | (((int)peer_ws) << 8));
 }
 
 void cleanup_test() {
@@ -439,6 +455,11 @@ void cleanup_test() {
 		perror("Closing TUN device");
 		exit(EXIT_FAILURE);
 	}
+
+	if (test_options) {
+		free(test_options);
+		test_options = NULL;
+	}
 }
 
 void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
@@ -446,7 +467,7 @@ void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 						uint32_t update_sport, uint32_t update_dport,
 						uint32_t new_seq, uint32_t seq, uint32_t ack,
 						size_t options_size, const char *options,
-						uint16_t peer_mss, uint8_t peer_ws) {
+						uint16_t peer_mss, uint8_t peer_ws, uint32_t flags) {
 	fprintf(stderr, "Application: SYN (recovery)\n");
 	send_segment(internal_log, saddr, daddr, sport, dport,
 			TH_SYN, new_seq, 0, options_size, options, 0, NULL);
@@ -460,7 +481,7 @@ void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 	recv_update(faddr, saddr, update_sport, update_dport,
 			daddr, saddr, dport, sport,
 			seq + 1, ack + 1, peer_mss, peer_ws,
-			(new_seq + 1) - (seq + 1), TCPR_HAVE_ACK);
+			(new_seq + 1) - (seq + 1), flags);
 
 	fprintf(stderr, "Application: ACK\n");
 	send_segment(internal_log, saddr, daddr, sport, dport,

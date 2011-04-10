@@ -10,7 +10,7 @@ int main(int argc, char **argv)
 	(void)argv;
 	const uint32_t net = 0x0a0a0a00;
 
-	setup_test("tcpr-test", "test-fin-simultaneous-recovery");
+	setup_test("tcpr-test", "test-graceful-shutdown");
 
 	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 7777, 
 						7777, 0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);
@@ -31,7 +31,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 4, net | 3, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 1,
+			0xcafebabe + 1, 0xdeadbeef + 1, 0, 0,
 			0,
 			TCPR_HAVE_ACK | TCPR_DONE_READING);
 
@@ -43,7 +43,7 @@ int main(int argc, char **argv)
 	fprintf(stderr, "Application: update\n");
 	send_update(net | 4, net | 3, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
-			0xcafebabe + 1, 0xdeadbeef + 1,
+			0xcafebabe + 1, 0xdeadbeef + 1, 0, 0,
 			0,
 			TCPR_HAVE_ACK | TCPR_DONE_READING | TCPR_DONE_WRITING);
 
