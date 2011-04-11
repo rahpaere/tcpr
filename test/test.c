@@ -475,7 +475,7 @@ void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 	fprintf(stderr, "     Filter: SYN ACK\n");
 	recv_segment(internal_log, daddr, saddr, dport, sport,
 			TH_SYN | TH_ACK, ack, new_seq + 1,
-			0, NULL, 0, NULL);
+			options_size, options, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(faddr, saddr, update_sport, update_dport,

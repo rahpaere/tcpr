@@ -18,7 +18,8 @@ int main(int argc, char **argv)
 	recover_connection(net | 5, net | 2, net | 3,
 				9999, 8888, 7777, 7777,
 				0xfeedbead, 0xcafebabe, 0xdeadbeef,
-				0, NULL, peer_mss, peer_ws, TCPR_HAVE_ACK | TCPR_HAVE_PEER_MSS | TCPR_HAVE_PEER_WS);
+				test_options_size, test_options, peer_mss, peer_ws, 
+				TCPR_HAVE_ACK | TCPR_HAVE_PEER_MSS | TCPR_HAVE_PEER_WS);
 
 	teardown_connection(net | 4, net | 3, 7777, 7777,
 			net | 2, net | 4, 8888, 9999,
