@@ -13,6 +13,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -26,6 +27,12 @@ uint8_t peer_ws;
 uint16_t peer_mss;
 size_t test_options_size;
 char* test_options; 
+
+
+const char *filter_path = "tcpr-filter.socket";
+const char *application_path = "tcpr-application.socket";
+int update_socket;
+struct sockaddr_un filter_address;
 
 int open_tun(char *device)
 {
@@ -252,126 +259,161 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	}
 }
 
-void send_update(uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport,
-				uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint16_t peer_mss, uint8_t peer_ws,
-				uint32_t delta, uint32_t flags)
+/*
+static void *read_updates(void *arg)
 {
-	char packet[SNAPLEN];
-	struct ip *ip;
-	struct udphdr *udp;
-	struct update *update;
-	size_t size = sizeof(*ip) + sizeof(*udp) + sizeof(*update);
-
-	ip = (struct ip *)packet;
-	ip->ip_v = 4;
-	ip->ip_hl = sizeof(*ip) / 4;
-	ip->ip_tos = 0;
-	ip->ip_len = htons(size);
-	ip->ip_id = 0;
-	ip->ip_off = 0;
-	ip->ip_ttl = 64;
-	ip->ip_p = IPPROTO_UDP;
-	ip->ip_sum = 0;
-	ip->ip_src.s_addr = htonl(saddr);
-	ip->ip_dst.s_addr = htonl(daddr);
-	compute_ip_checksum(ip);
-
-	udp = (struct udphdr *)((uint32_t *)ip + ip->ip_hl);
-	udp->uh_sport = htons(sport);
-	udp->uh_dport = htons(dport);
-	udp->uh_sum = 0;
-	udp->uh_ulen = htons(sizeof(*udp) + sizeof(*update));
-	update = (struct update *)(udp + 1);
-	update->peer_address = htonl(peer_address);
-	update->address = htonl(address);
-	update->tcpr.peer_port = htons(peer_port);
-	update->tcpr.port = htons(port);
-	update->tcpr.peer_ack = htonl(peer_ack);
-	update->tcpr.ack = htonl(ack);
-	update->tcpr.peer_mss = htonl(peer_mss);
-	update->tcpr.peer_ws = htonl(peer_ws);
-	update->tcpr.delta = delta;
-	update->tcpr.flags = flags;
-	compute_udp_checksum(ip, udp);
-
-	log_packet(internal_log, packet, size);
-	if (write(tun, packet, size) < 0) {
-		perror("Writing packet");
-		exit(EXIT_FAILURE);
-	}
-}
-
-void recv_update(uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport,
-				uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint16_t peer_mss, uint8_t peer_ws,
-				uint32_t delta, uint32_t flags)
-{
-	char packet[SNAPLEN];
-	struct ip *ip;
-	struct udphdr *udp;
-	struct update *update;
+	struct update update;
 	ssize_t size;
 
-	if ((size = read(tun, packet, sizeof(packet))) < 0) {
-		perror("Reading packet");
+	(void)arg;
+
+	size = read(update_socket, &update, sizeof(update));
+	clock_gettime(CLOCK_REALTIME, &timestamp);
+	if (size < 0) {
+		perror("Receiving update");
 		exit(EXIT_FAILURE);
 	}
-	log_packet(internal_log, packet, size);
+	if (recovering) {
+		//message("Recovered.");
+		state->tcpr.delta = update.tcpr.delta;
+		fprintf(stderr, "Peer has acknowledged %" PRIu32 " bytes.\n",
+				ntohl(update.tcpr.peer_ack)
+					- ntohl(state->tcpr.peer_ack));
+		fprintf(stderr, "Delta is now %" PRIu32 ".\n",
+				state->tcpr.delta);
+	} else {
+		//message("Connected.");
+		pthread_mutex_lock(&flags_lock);
+		memcpy(state, &update, sizeof(update));
+		pthread_cond_broadcast(&state_ready);
+		pthread_mutex_unlock(&flags_lock);
+	}
 
-	ip = (struct ip *)packet;
-	expect(ip->ip_v, 4, "IP version");
-	compute_ip_checksum(ip);
-	expect(ntohs(ip->ip_sum), 0, "IP checksum");
-	expect(ip->ip_p, IPPROTO_UDP, "IP protocol");
-	expect(size, ntohs(ip->ip_len), "Received length");
-	expect(ntohs(ip->ip_len),
-		ip->ip_hl * 4 + sizeof(*udp) + sizeof(*update),
-		"IP length");
-	expect(ntohl(ip->ip_src.s_addr), saddr, "IP source");
-	expect(ntohl(ip->ip_dst.s_addr), daddr, "IP destination");
+	while ((size = read(update_socket, &update, sizeof(update))) > 0) {
+		clock_gettime(CLOCK_REALTIME, &timestamp);
+		if (!update.tcpr.flags) {
+			//message("Filter needs recovery.");
+			if (sendto(update_socket, state, sizeof(*state), 0,
+					(struct sockaddr *)&filter_address,
+					sizeof(filter_address)) < 0) {
+				perror("Sending state");
+				exit(EXIT_FAILURE);
+			}
+			//message_now("Sent state to filter.");
+		} else if (update.tcpr.flags & TCPR_TIME_WAIT) {
+			//message("Entering TIME_WAIT.");
+			pthread_mutex_lock(&flags_lock);
+			state->tcpr.flags |= TCPR_FINISHED;
+			pthread_mutex_unlock(&flags_lock);
+			if (sendto(update_socket, state, sizeof(*state), 0,
+					(struct sockaddr *)&filter_address,
+					sizeof(filter_address)) < 0) {
+				perror("Removing filter state");
+				exit(EXIT_FAILURE);
+			}
+			//message_now("Removed filter state.");
+			return NULL;
+		} else {
+			//message("Unexpected update.");
+		}
+	}
+	if (size < 0) {
+		perror("Receiving update");
+		exit(EXIT_FAILURE);
+	}
+	return NULL;
+}*/
 
-	udp = (struct udphdr *)((uint32_t *)ip + ip->ip_hl);
-	if (udp->uh_sum)
-		compute_udp_checksum(ip, udp);
-	expect(udp->uh_sum, 0, "UDP checksum");
-	expect(ntohs(udp->uh_ulen), sizeof(*udp) + sizeof(*update),
-		"UDP length");
-	expect(ntohs(udp->uh_sport), sport, "UDP source");
-	expect(ntohs(udp->uh_dport), dport, "UDP destination");
+static void setup_update_connection(void)
+{
+	struct sockaddr_un addr;
 
-	update = (struct update *)(udp + 1);
-	expect(ntohl(update->peer_address), peer_address,
+	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (update_socket < 0) {
+		perror("Creating update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, application_path, sizeof(addr.sun_path) - 1);
+	unlink(application_path);
+	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("Binding update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&filter_address, 0, sizeof(filter_address));
+	filter_address.sun_family = AF_UNIX;
+	strncpy(filter_address.sun_path, filter_path,
+		sizeof(filter_address.sun_path) - 1);
+
+	//pthread_create(&update_thread, NULL, read_updates, NULL);
+}
+
+void send_update(uint32_t peer_address, uint32_t address,
+				uint16_t peer_port, uint16_t port,
+				uint32_t peer_ack, uint32_t ack,
+				uint16_t peer_mss, uint8_t peer_ws,
+				uint32_t delta, uint32_t flags)
+{
+	struct update update;
+
+	update.peer_address = htonl(peer_address);
+	update.address = htonl(address);
+	update.tcpr.peer_port = htons(peer_port);
+	update.tcpr.port = htons(port);
+	update.tcpr.peer_ack = htonl(peer_ack);
+	update.tcpr.ack = htonl(ack);
+	update.tcpr.peer_mss = htonl(peer_mss);
+	update.tcpr.peer_ws = htonl(peer_ws);
+	update.tcpr.delta = delta;
+	update.tcpr.flags = flags;
+
+	sendto(update_socket, &update,
+						sizeof(update), 0,
+						(struct sockaddr *)
+						&filter_address,
+						sizeof(filter_address));
+}
+
+void recv_update(uint32_t peer_address, uint32_t address,
+				uint16_t peer_port, uint16_t port,
+				uint32_t peer_ack, uint32_t ack,
+				uint16_t peer_mss, uint8_t peer_ws,
+				uint32_t delta, uint32_t flags)
+{
+	struct update update;
+	ssize_t size;
+
+	size = read(update_socket, &update, sizeof(update));
+
+	expect(size, sizeof(update), "Size of update");
+	expect(ntohl(update.peer_address), peer_address,
 		"Update peer address");
-	expect(ntohl(update->address), address, "Update address");
-	expect(ntohs(update->tcpr.peer_port), peer_port, "Update peer port");
-	expect(ntohs(update->tcpr.port), port, "Update port");
-	expect(ntohl(update->tcpr.peer_ack), peer_ack,
+	expect(ntohl(update.address), address, "Update address");
+	expect(ntohs(update.tcpr.peer_port), peer_port, "Update peer port");
+	expect(ntohs(update.tcpr.port), port, "Update port");
+	expect(ntohl(update.tcpr.peer_ack), peer_ack,
 		"Update peer acknowledgment");
 	if (flags & TCPR_HAVE_PEER_MSS)
-		expect(ntohs(update->tcpr.peer_mss), peer_mss,
+		expect(ntohs(update.tcpr.peer_mss), peer_mss,
 			"Update peer maximum segment size");
 	if (flags & TCPR_HAVE_PEER_WS)
-		expect(update->tcpr.peer_ws, peer_ws,
+		expect(update.tcpr.peer_ws, peer_ws,
 			"Update peer window scaling");
-	expect(ntohl(update->tcpr.ack), ack,
+	expect(ntohl(update.tcpr.ack), ack,
 		"Update acknowledgment");
-	expect(update->tcpr.delta, delta, "Update delta");
-	expect(update->tcpr.flags, flags, "Update flags");
+	expect(update.tcpr.delta, delta, "Update delta");
+	expect(update.tcpr.flags, flags, "Update flags");
 }
 
 void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 						uint16_t sport, uint16_t dport, 
-						uint32_t update_sport, uint32_t update_dport,
 						uint32_t start_seq, uint32_t start_ack,
 						size_t options_size, const char *options,
 						uint16_t peer_mss, uint8_t peer_ws) {
+
+	setup_update_connection();
 
 	fprintf(stderr, "       Peer: SYN\n");
 	send_segment(external_log, saddr, faddr, sport, dport,
@@ -396,20 +438,16 @@ void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
-	recv_update(faddr, daddr, update_sport, update_dport,
-			saddr, daddr, sport, dport,
+	recv_update(saddr, daddr, sport, dport,
 			start_ack + 1, start_seq + 1, peer_mss, peer_ws, 0, TCPR_HAVE_ACK);
 }
 
-void teardown_connection(uint32_t saddr, uint32_t daddr,
-							uint16_t sport, uint16_t dport,
-							uint32_t peer_address, uint32_t address,
+void teardown_connection(uint32_t peer_address, uint32_t address,
 							uint16_t peer_port, uint16_t port,
 							uint32_t peer_ack, uint32_t ack,
 							uint32_t delta, uint32_t flags) {
 	fprintf(stderr, "Application: update (remove state)\n");
-	send_update(saddr, daddr, sport, dport,
-			peer_address, address, peer_port, port,
+	send_update(peer_address, address, peer_port, port,
 			peer_ack, ack, 0, 0, delta, flags);
 }
 
@@ -464,7 +502,6 @@ void cleanup_test() {
 
 void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 						uint16_t sport, uint16_t dport, 
-						uint32_t update_sport, uint32_t update_dport,
 						uint32_t new_seq, uint32_t seq, uint32_t ack,
 						size_t options_size, const char *options,
 						uint16_t peer_mss, uint8_t peer_ws, uint32_t flags) {
@@ -478,8 +515,7 @@ void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 			options_size, options, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
-	recv_update(faddr, saddr, update_sport, update_dport,
-			daddr, saddr, dport, sport,
+	recv_update(daddr, saddr, dport, sport,
 			seq + 1, ack + 1, peer_mss, peer_ws,
 			(new_seq + 1) - (seq + 1), flags);
 

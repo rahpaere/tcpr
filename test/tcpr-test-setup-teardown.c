@@ -12,10 +12,10 @@ int main(int argc, char **argv)
 
 	setup_test("tcpr-test", "test-setup-teardown");
 
-	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 7777, 
-						7777, 0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);
-	teardown_connection(net | 4, net | 3, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 
+						0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);
+
+	teardown_connection(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 1,
 			0,
 			TCPR_HAVE_ACK | TCPR_DONE_READING | TCPR_DONE_WRITING

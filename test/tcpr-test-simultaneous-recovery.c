@@ -24,13 +24,11 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update (failure)\n");
-	recv_update(net | 3, net | 4, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	recv_update(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0, 0, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 3, net | 4, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	send_update(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 5, 0, 0, 0, TCPR_HAVE_ACK);
 
 	fprintf(stderr, "     Filter: ACK\n");
@@ -48,8 +46,7 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "     Filter: update\n");
-	recv_update(net | 3, net | 4, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	recv_update(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 5, 0, 0,
 			0, TCPR_HAVE_ACK);
 
@@ -62,14 +59,12 @@ int main(int argc, char **argv)
 			0, NULL, 0, NULL);
 
 	fprintf(stderr, "Application: update (reset)\n");
-	send_update(net | 4, net | 3, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	send_update(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 5, 0, 0,
 			0,
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
 
-	teardown_connection(net | 4, net | 3, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	teardown_connection(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 1,
 			0,
 			TCPR_HAVE_ACK | TCPR_DONE_READING | TCPR_DONE_WRITING

@@ -18,12 +18,10 @@ int main(int argc, char **argv)
 			0, NULL, 2, "a");
 
 	fprintf(stderr, "     Filter: update (failure)\n");
-	recv_update(net | 3, net | 4, 7777, 7777,
-			net | 2, net | 4, 8888, 9999, 0, 0, 0, 0, 0, 0);
+	recv_update(net | 2, net | 4, 8888, 9999, 0, 0, 0, 0, 0, 0);
 
 	fprintf(stderr, "Application: update\n");
-	send_update(net | 4, net | 3, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	send_update(net | 2, net | 4, 8888, 9999,
 			0xbeefbead, 0xbabedeed - 4, peer_mss, peer_ws, 0, TCPR_HAVE_ACK);
 
 	fprintf(stderr, "     Filter: ACK\n");
@@ -39,8 +37,7 @@ int main(int argc, char **argv)
 			TH_ACK, 0xbeefbead, 0xbabedeed - 4,
 			0, NULL, 2, "a");
 
-	teardown_connection(net | 4, net | 3, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	teardown_connection(net | 2, net | 4, 8888, 9999,
 			0xbeefbead, 0xbabedeed - 4, 0,
 			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
 

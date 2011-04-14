@@ -12,11 +12,11 @@ int main(int argc, char **argv)
 
 	setup_test("tcpr-test", "test-recover-app-send");
 
-	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 7777, 
-						7777, 0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);
+	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 
+						0xdeadbeef, 0xcafebabe, 0, NULL, 0, 0);
 
 	recover_connection(net | 5, net | 2, net | 3,
-				9999, 8888, 7777, 7777,
+				9999, 8888,
 				0xfeedbead, 0xcafebabe, 0xdeadbeef,
 				0, NULL, 0, 0, TCPR_HAVE_ACK);
 
@@ -36,8 +36,7 @@ int main(int argc, char **argv)
 			TH_ACK, 0xdeadbeef + 1, 0xfeedbead + 6,
 			0, NULL, 0, NULL);
 
-	teardown_connection(net | 4, net | 3, 7777, 7777,
-			net | 2, net | 4, 8888, 9999,
+	teardown_connection(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 6, 0xdeadbeef + 1,
 			(0xfeedbead + 1) - (0xcafebabe + 1),
 			TCPR_HAVE_ACK | TCPR_DONE_READING | TCPR_DONE_WRITING

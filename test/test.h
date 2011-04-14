@@ -58,35 +58,29 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 				size_t options_size, const char *options,
 				size_t payload_size, const char *payload);
 
-void send_update(uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport,
-				uint32_t peer_address, uint32_t address,
+void send_update(uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
 				uint16_t peer_mss, uint8_t peer_ws,
 				uint32_t delta, uint32_t flags);
 
-void recv_update(uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport,
-				uint32_t peer_address, uint32_t address,
+void recv_update(uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
 				uint16_t peer_mss, uint8_t peer_ws,
 				uint32_t delta, uint32_t flags);
 
 void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
-				uint16_t sport, uint16_t dport, 
-				uint32_t update_sport, uint32_t update_dport,
-				uint32_t start_seq, uint32_t start_ack,
-				size_t options_size, const char *options,
-				uint16_t peer_mss, uint8_t peer_ws);
+						uint16_t sport, uint16_t dport, 
+						uint32_t start_seq, uint32_t start_ack,
+						size_t options_size, const char *options,
+						uint16_t peer_mss, uint8_t peer_ws);
 
-void teardown_connection(uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport,
-				uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint32_t delta, uint32_t flags);
+
+void teardown_connection(uint32_t peer_address, uint32_t address,
+							uint16_t peer_port, uint16_t port,
+							uint32_t peer_ack, uint32_t ack,
+							uint32_t delta, uint32_t flags);
 
 
 void setup_test(char *device, char *log_name);
@@ -95,7 +89,6 @@ void cleanup_test();
 
 void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 				uint16_t sport, uint16_t dport, 
-				uint32_t update_sport, uint32_t update_dport,
 				uint32_t new_seq, uint32_t seq, uint32_t ack,
 				size_t options_size, const char *options,
 				uint16_t peer_mss, uint8_t peer_ws, uint32_t flags);
