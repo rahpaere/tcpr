@@ -29,8 +29,8 @@ size_t test_options_size;
 char* test_options; 
 
 
-const char *filter_path = "tcpr-filter.socket";
-const char *application_path = "tcpr-application.socket";
+const char *filter_path = "/tmp/tcpr-filter.socket";
+const char *application_path = "/tmp/tcpr-application.socket";
 int update_socket;
 struct sockaddr_un filter_address;
 

@@ -26,7 +26,7 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 			option++;
 			break;
 		case TCPOPT_MAXSEG:
-			state->peer_mss = (uint16_t)option[2] << 8 | option[1];
+			state->peer_mss = (uint16_t)option[2] << 8 | option[3];
 			state->flags |= TCPR_HAVE_PEER_MSS;
 			option += option[1];
 			break;
@@ -230,7 +230,7 @@ int tcpr_handle_update(struct tcpr_state *state, struct tcpr_update *update)
 {
 	int flags = 0;
 
-	if (update->flags & TCPR_TIME_WAIT)
+	if (update->flags & TCPR_FINISHED)
 		return TCPR_CLOSED;
 	if ((update->flags & TCPR_DONE_READING) &&
 			(state->flags & TCPR_HAVE_ACK))

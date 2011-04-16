@@ -486,8 +486,8 @@ int main(int argc, char **argv)
 {
 	const char *external_host = NULL;
 	const char *internal_host = NULL;
-	const char *filter_path = "tcpr-filter.socket";
-	const char *application_path = "tcpr-application.socket";
+	const char *filter_path = "/tmp/tcpr-filter.socket";
+	const char *application_path = "/tmp/tcpr-application.socket";
 	char packet[65536];
 	int netfilter_fd;
 	int ret;
