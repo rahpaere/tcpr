@@ -58,6 +58,7 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 				size_t options_size, const char *options,
 				size_t payload_size, const char *payload);
 
+void setup_update_connection(void);
 void send_update(uint32_t peer_address, uint32_t address,
 				uint16_t peer_port, uint16_t port,
 				uint32_t peer_ack, uint32_t ack,
@@ -80,7 +81,7 @@ void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 void teardown_connection(uint32_t peer_address, uint32_t address,
 							uint16_t peer_port, uint16_t port,
 							uint32_t peer_ack, uint32_t ack,
-							uint32_t delta, uint32_t flags);
+							uint32_t delta);
 
 
 void setup_test(char *device, char *log_name);

@@ -324,7 +324,7 @@ static void *read_updates(void *arg)
 	return NULL;
 }*/
 
-static void setup_update_connection(void)
+void setup_update_connection(void)
 {
 	struct sockaddr_un addr;
 
@@ -396,7 +396,7 @@ void recv_update(uint32_t peer_address, uint32_t address,
 	expect(ntohl(update.tcpr.peer_ack), peer_ack,
 		"Update peer acknowledgment");
 	if (flags & TCPR_HAVE_PEER_MSS)
-		expect(ntohs(update.tcpr.peer_mss), peer_mss,
+		expect(update.tcpr.peer_mss, peer_mss,
 			"Update peer maximum segment size");
 	if (flags & TCPR_HAVE_PEER_WS)
 		expect(update.tcpr.peer_ws, peer_ws,
@@ -404,6 +404,7 @@ void recv_update(uint32_t peer_address, uint32_t address,
 	expect(ntohl(update.tcpr.ack), ack,
 		"Update acknowledgment");
 	expect(update.tcpr.delta, delta, "Update delta");
+
 	expect(update.tcpr.flags, flags, "Update flags");
 }
 
@@ -412,6 +413,12 @@ void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 						uint32_t start_seq, uint32_t start_ack,
 						size_t options_size, const char *options,
 						uint16_t peer_mss, uint8_t peer_ws) {
+
+    uint32_t option_flags = 0;
+    if (peer_mss)
+        option_flags |= TCPR_HAVE_PEER_MSS;
+    if (peer_ws)
+        option_flags |= TCPR_HAVE_PEER_WS;
 
 	setup_update_connection();
 
@@ -439,16 +446,16 @@ void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(saddr, daddr, sport, dport,
-			start_ack + 1, start_seq + 1, peer_mss, peer_ws, 0, TCPR_HAVE_ACK);
+			start_ack + 1, start_seq + 1, peer_mss, peer_ws, 0, TCPR_HAVE_ACK | option_flags);
 }
 
 void teardown_connection(uint32_t peer_address, uint32_t address,
 							uint16_t peer_port, uint16_t port,
 							uint32_t peer_ack, uint32_t ack,
-							uint32_t delta, uint32_t flags) {
+							uint32_t delta) {
 	fprintf(stderr, "Application: update (remove state)\n");
 	send_update(peer_address, address, peer_port, port,
-			peer_ack, ack, 0, 0, delta, flags);
+			peer_ack, ack, 0, 0, delta, TCPR_FINISHED);
 }
 
 void setup_test(char *device, char *log_name) {

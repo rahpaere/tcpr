@@ -11,6 +11,7 @@ int main(int argc, char **argv)
 	const uint32_t net = 0x0a0a0a00;
 
 	setup_test("tcpr-test", "test-filter-recovery");
+	setup_update_connection();
 
 	fprintf(stderr, "Application: \"a\"\n");
 	send_segment(internal_log, net | 4, net | 2, 9999, 8888,
@@ -38,8 +39,7 @@ int main(int argc, char **argv)
 			0, NULL, 2, "a");
 
 	teardown_connection(net | 2, net | 4, 8888, 9999,
-			0xbeefbead, 0xbabedeed - 4, 0,
-			TCPR_HAVE_ACK | TCPR_TIME_WAIT);
+			0xbeefbead, 0xbabedeed - 4, 0);
 
 	cleanup_test();
 	return EXIT_SUCCESS;

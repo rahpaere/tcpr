@@ -23,9 +23,7 @@ int main(int argc, char **argv)
 
 	teardown_connection(net | 2, net | 4, 8888, 9999,
 			0xcafebabe + 1, 0xdeadbeef + 1,
-			(0xfeedbead + 1) - (0xcafebabe + 1),
-			TCPR_HAVE_ACK | TCPR_DONE_READING | TCPR_DONE_WRITING
-				| TCPR_TIME_WAIT);
+			(0xfeedbead + 1) - (0xcafebabe + 1));
 
 	cleanup_test();
 	return EXIT_SUCCESS;
