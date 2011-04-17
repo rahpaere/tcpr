@@ -22,3 +22,14 @@ tcpr-application.state
 tcpr-chat
 tcpr-netfilter
 tcpr-state.log
+test/tcpr-test-app-data
+test/tcpr-test-filter-recovery
+test/tcpr-test-graceful-shutdown
+test/tcpr-test-peer-data
+test/tcpr-test-recover-app-send
+test/tcpr-test-recover-connection
+test/tcpr-test-recover-peer-send
+test/tcpr-test-setup-teardown
+test/tcpr-test-simultaneous-recovery
+test/tcpr-test-spurious-fins
+test/tcpr-test-spurious-rsts
