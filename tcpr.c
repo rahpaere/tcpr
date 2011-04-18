@@ -266,8 +266,8 @@ void tcpr_make_update(struct tcpr_update *update, struct tcpr_state *state)
 			&& state->peer_ack == state->fin
 			&& state->peer_fin == state->ack)
 		update->flags |= TCPR_TIME_WAIT;
-    if (state->flags & TCPR_HAVE_PEER_MSS)
-        update->flags |= TCPR_HAVE_PEER_MSS;
-    if (state->flags & TCPR_HAVE_PEER_WS)
-        update->flags |= TCPR_HAVE_PEER_WS;
+	if (state->flags & TCPR_HAVE_PEER_MSS)
+		update->flags |= TCPR_HAVE_PEER_MSS;
+	if (state->flags & TCPR_HAVE_PEER_WS)
+		update->flags |= TCPR_HAVE_PEER_WS;
 }

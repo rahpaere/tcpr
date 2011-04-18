@@ -1,3 +1,6 @@
+#ifndef TEST_H
+#define TEST_H
+
 #include <tcpr.h>
 
 #include <fcntl.h>
@@ -24,72 +27,50 @@ struct update {
 
 extern FILE *external_log;
 extern FILE *internal_log;
-extern int tun;
 
-extern uint8_t peer_ws;
 extern uint16_t peer_mss;
+extern uint8_t peer_ws;
+extern uint8_t test_options[40]; 
 extern size_t test_options_size;
-extern char* test_options; 
 
-int open_tun(char *device);
-FILE *open_log(char *file);
-
-void log_packet(FILE *f, const char *packet, size_t size);
-
-void expect(uint32_t actual, uint32_t expected, const char *s);
-
-uint32_t shorten(uint32_t n);
-
-uint32_t checksum(uint16_t *data, size_t size);
-
-void compute_ip_checksum(struct ip *ip);
-void compute_tcp_checksum(struct ip *ip, struct tcphdr *tcp);
-void compute_udp_checksum(struct ip *ip, struct udphdr *udp);
-
-void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport, uint8_t flags,
-				uint32_t seq, uint32_t ack,
-				size_t options_size, const char *options,
-				size_t payload_size, const char *payload);
-
-void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport, uint8_t flags,
-				uint32_t seq, uint32_t ack,
-				size_t options_size, const char *options,
-				size_t payload_size, const char *payload);
-
-void setup_update_connection(void);
-void send_update(uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint16_t peer_mss, uint8_t peer_ws,
-				uint32_t delta, uint32_t flags);
-
-void recv_update(uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint16_t peer_mss, uint8_t peer_ws,
-				uint32_t delta, uint32_t flags);
+void setup_test(const char *device, const char *log_name);
+void cleanup_test(void);
 
 void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
-						uint16_t sport, uint16_t dport, 
-						uint32_t start_seq, uint32_t start_ack,
-						size_t options_size, const char *options,
-						uint16_t peer_mss, uint8_t peer_ws);
-
-
-void teardown_connection(uint32_t peer_address, uint32_t address,
-							uint16_t peer_port, uint16_t port,
-							uint32_t peer_ack, uint32_t ack,
-							uint32_t delta);
-
-
-void setup_test(char *device, char *log_name);
-
-void cleanup_test();
-
+			uint16_t sport, uint16_t dport, 
+			uint32_t start_seq, uint32_t start_ack,
+			size_t options_size, const uint8_t *options,
+			uint16_t peer_mss, uint8_t peer_ws);
 void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
-				uint16_t sport, uint16_t dport, 
-				uint32_t new_seq, uint32_t seq, uint32_t ack,
-				size_t options_size, const char *options,
-				uint16_t peer_mss, uint8_t peer_ws, uint32_t flags);
+			uint16_t sport, uint16_t dport, 
+			uint32_t new_seq, uint32_t seq, uint32_t ack,
+			size_t options_size, const uint8_t *options,
+			uint16_t peer_mss, uint8_t peer_ws, uint32_t flags);
+void cleanup_connection(uint32_t peer_address, uint32_t address,
+			uint16_t peer_port, uint16_t port,
+			uint32_t peer_ack, uint32_t ack,
+			uint32_t delta);
+
+void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
+			uint16_t sport, uint16_t dport, uint8_t flags,
+			uint32_t seq, uint32_t ack,
+			size_t options_size, const uint8_t *options,
+			size_t payload_size, const char *payload);
+void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
+			uint16_t sport, uint16_t dport, uint8_t flags,
+			uint32_t seq, uint32_t ack,
+			size_t options_size, const uint8_t *options,
+			size_t payload_size, const char *payload);
+
+void send_update(uint32_t peer_address, uint32_t address,
+			uint16_t peer_port, uint16_t port,
+			uint32_t peer_ack, uint32_t ack,
+			uint16_t peer_mss, uint8_t peer_ws,
+			uint32_t delta, uint32_t flags);
+void recv_update(uint32_t peer_address, uint32_t address,
+			uint16_t peer_port, uint16_t port,
+			uint32_t peer_ack, uint32_t ack,
+			uint16_t peer_mss, uint8_t peer_ws,
+			uint32_t delta, uint32_t flags);
+
+#endif

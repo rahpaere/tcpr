@@ -6,7 +6,6 @@
 #include <net/if.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
-#include <netinet/udp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,22 +18,24 @@
 
 #define SNAPLEN 65536
 
+#define EXTERNAL_PCAP "-external.pcap"
+#define INTERNAL_PCAP "-external.pcap"
+
 FILE *external_log;
 FILE *internal_log;
 int tun;
 
-uint8_t peer_ws;
-uint16_t peer_mss;
+uint16_t peer_mss = 0x0640;
+uint8_t peer_ws = 0x02;
+uint8_t test_options[40]; 
 size_t test_options_size;
-char* test_options; 
-
 
 const char *filter_path = "/tmp/tcpr-filter.socket";
 const char *application_path = "/tmp/tcpr-application.socket";
 int update_socket;
 struct sockaddr_un filter_address;
 
-int open_tun(char *device)
+static int open_tun(const char *device)
 {
 	int f;
 	struct ifreq r;
@@ -55,7 +56,7 @@ int open_tun(char *device)
 	return f;
 }
 
-FILE *open_log(char *file)
+static FILE *open_log(const char *file)
 {
 	FILE *f;
 	static const struct {
@@ -73,17 +74,15 @@ FILE *open_log(char *file)
 		perror("Opening log file");
 		exit(EXIT_FAILURE);
 	}
-	
 	if (!fwrite(&h, sizeof(h), 1, f)) {
 		perror("Writing log file header");
 		exit(EXIT_FAILURE);
 	}
-
 	fflush(f);
 	return f;
 }
 
-void log_packet(FILE *f, const char *packet, size_t size)
+static void log_packet(FILE *f, const uint8_t *packet, size_t size)
 {
 	struct timespec t;
 	struct {
@@ -102,16 +101,14 @@ void log_packet(FILE *f, const char *packet, size_t size)
 		perror("Writing log packet header");
 		exit(EXIT_FAILURE);
 	}
-
 	if (!fwrite(packet, size, 1, f)) {
 		perror("Logging packet");
 		exit(EXIT_FAILURE);
 	}
-
 	fflush(f);
 }
 
-void expect(uint32_t actual, uint32_t expected, const char *s)
+static void expect(uint32_t actual, uint32_t expected, const char *s)
 {
 	if (actual != expected) {
 		fprintf(stderr, "%s %" PRIu32 " (expected %" PRIu32 ").\n",
@@ -120,12 +117,12 @@ void expect(uint32_t actual, uint32_t expected, const char *s)
 	}
 }
 
-uint32_t shorten(uint32_t n)
+static uint32_t shorten(uint32_t n)
 {
 	return (n >> 16) + (n & 0xffff);
 }
 
-uint32_t checksum(uint16_t *data, size_t size)
+static uint32_t checksum(uint16_t *data, size_t size)
 {
 	uint32_t sum;
 	for (sum = 0; size > 1; size -= 2)
@@ -135,13 +132,13 @@ uint32_t checksum(uint16_t *data, size_t size)
 	return sum;
 }
 
-void compute_ip_checksum(struct ip *ip)
+static void compute_ip_checksum(struct ip *ip)
 {
 	uint32_t sum = checksum((uint16_t *)ip, ip->ip_hl * 4);
 	ip->ip_sum = ~shorten(shorten(sum));
 }
 
-void compute_tcp_checksum(struct ip *ip, struct tcphdr *tcp)
+static void compute_tcp_checksum(struct ip *ip, struct tcphdr *tcp)
 {
 	uint32_t size = ntohs(ip->ip_len) - ip->ip_hl * 4;
 	uint32_t sum = checksum((uint16_t *)tcp, size)
@@ -151,23 +148,156 @@ void compute_tcp_checksum(struct ip *ip, struct tcphdr *tcp)
 	tcp->th_sum = ~shorten(shorten(sum));
 }
 
-void compute_udp_checksum(struct ip *ip, struct udphdr *udp)
+static void setup_update_connection(void)
 {
-	uint32_t size = ntohs(ip->ip_len) - ip->ip_hl * 4;
-	uint32_t sum = checksum((uint16_t *)udp, size)
-			+ shorten(ip->ip_dst.s_addr)
-			+ shorten(ip->ip_src.s_addr)
-			+ htons(ip->ip_p + size);
-	udp->uh_sum = ~shorten(shorten(sum));
+	struct sockaddr_un addr;
+
+	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (update_socket < 0) {
+		perror("Creating update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, application_path, sizeof(addr.sun_path) - 1);
+	unlink(application_path);
+	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("Binding update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&filter_address, 0, sizeof(filter_address));
+	filter_address.sun_family = AF_UNIX;
+	strncpy(filter_address.sun_path, filter_path,
+		sizeof(filter_address.sun_path) - 1);
+}
+
+void setup_test(const char *device, const char *log_name)
+{
+	char external_log_name[strlen(log_name) + strlen(EXTERNAL_PCAP) + 1];
+	char internal_log_name[strlen(log_name) + strlen(INTERNAL_PCAP) + 1];
+
+	sprintf(external_log_name, "%s" EXTERNAL_PCAP, log_name);
+	sprintf(internal_log_name, "%s" INTERNAL_PCAP, log_name);
+
+	tun = open_tun(device);
+	external_log = open_log(external_log_name);
+	internal_log = open_log(internal_log_name);
+
+	test_options[test_options_size++] = TCPOPT_MAXSEG;
+	test_options[test_options_size++] = 4;
+	test_options[test_options_size++] = peer_mss >> 8;
+	test_options[test_options_size++] = peer_mss & 0xff;
+
+	test_options[test_options_size++] = TCPOPT_WINDOW;
+	test_options[test_options_size++] = 3;
+	test_options[test_options_size++] = peer_ws;
+
+	if (test_options_size % 4) {
+		test_options[test_options_size++] = TCPOPT_EOL;
+		test_options_size += test_options_size % 4;
+	}
+
+	setup_update_connection();
+}
+
+void cleanup_test(void)
+{
+	if (fclose(external_log)) {
+		perror("Closing external log file");
+		exit(EXIT_FAILURE);
+	}
+	if (fclose(internal_log)) {
+		perror("Closing internal log file");
+		exit(EXIT_FAILURE);
+	}
+	if (close(tun)) {
+		perror("Closing TUN device");
+		exit(EXIT_FAILURE);
+	}
+	if (close(update_socket)) {
+		perror("Closing update socket");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
+			uint16_t sport, uint16_t dport, 
+			uint32_t start_seq, uint32_t start_ack,
+			size_t options_size, const uint8_t *options,
+			uint16_t peer_mss, uint8_t peer_ws)
+{
+	uint32_t option_flags = 0;
+	if (peer_mss)
+		option_flags |= TCPR_HAVE_PEER_MSS;
+	if (peer_ws)
+		option_flags |= TCPR_HAVE_PEER_WS;
+
+	fprintf(stderr, "       Peer: SYN\n");
+	send_segment(external_log, saddr, faddr, sport, dport, TH_SYN,
+			start_seq, 0, options_size, options, 0, NULL);
+	recv_segment(internal_log, saddr, daddr, sport, dport, TH_SYN,
+			start_seq, 0, options_size, options, 0, NULL);
+
+	fprintf(stderr, "Application: SYN ACK\n");
+	send_segment(internal_log, daddr, saddr, dport, sport, TH_SYN | TH_ACK,
+			start_ack, start_seq + 1, 0, NULL, 0, NULL);
+	recv_segment(external_log, faddr, saddr, dport, sport, TH_SYN | TH_ACK,
+			start_ack, start_seq + 1, 0, NULL, 0, NULL);
+
+	fprintf(stderr, "       Peer: ACK\n");
+	send_segment(external_log, saddr, faddr, sport, dport, TH_ACK,
+			start_seq + 1, start_ack + 1, 0, NULL, 0, NULL);
+	recv_segment(internal_log, saddr, daddr, sport, dport, TH_ACK,
+			start_seq + 1, start_ack + 1, 0, NULL, 0, NULL);
+
+	fprintf(stderr, "     Filter: update\n");
+	recv_update(saddr, daddr, sport, dport, start_ack + 1, start_seq + 1,
+			peer_mss, peer_ws, 0, TCPR_HAVE_ACK | option_flags);
+}
+
+void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
+			uint16_t sport, uint16_t dport, 
+			uint32_t new_seq, uint32_t seq, uint32_t ack,
+			size_t options_size, const uint8_t *options,
+			uint16_t peer_mss, uint8_t peer_ws, uint32_t flags)
+{
+	fprintf(stderr, "Application: SYN (recovery)\n");
+	send_segment(internal_log, saddr, daddr, sport, dport, TH_SYN, new_seq,
+			0, options_size, options, 0, NULL);
+
+	fprintf(stderr, "     Filter: SYN ACK\n");
+	recv_segment(internal_log, daddr, saddr, dport, sport, TH_SYN | TH_ACK,
+			ack, new_seq + 1, options_size, options, 0, NULL);
+
+	fprintf(stderr, "     Filter: update\n");
+	recv_update(daddr, saddr, dport, sport, seq + 1, ack + 1, peer_mss,
+			peer_ws, (new_seq + 1) - (seq + 1), flags);
+
+	fprintf(stderr, "Application: ACK\n");
+	send_segment(internal_log, saddr, daddr, sport, dport, TH_ACK,
+			new_seq + 1, ack + 1, 0, NULL, 0, NULL);
+	recv_segment(external_log, faddr, daddr, sport, dport, TH_ACK, seq + 1,
+			ack + 1, 0, NULL, 0, NULL);
+}
+
+void cleanup_connection(uint32_t peer_address, uint32_t address,
+			uint16_t peer_port, uint16_t port,
+			uint32_t peer_ack, uint32_t ack,
+			uint32_t delta)
+{
+	fprintf(stderr, "Application: update (remove state)\n");
+	send_update(peer_address, address, peer_port, port, peer_ack, ack, 0,
+			0, delta, TCPR_FINISHED);
 }
 
 void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport, uint8_t flags,
-				uint32_t seq, uint32_t ack,
-				size_t options_size, const char *options,
-				size_t payload_size, const char *payload)
+			uint16_t sport, uint16_t dport, uint8_t flags,
+			uint32_t seq, uint32_t ack,
+			size_t options_size, const uint8_t *options,
+			size_t payload_size, const char *payload)
 {
-	char packet[SNAPLEN];
+	uint8_t packet[SNAPLEN];
 	struct ip *ip;
 	struct tcphdr *tcp;
 	size_t size = sizeof(*ip) + sizeof(*tcp) + options_size + payload_size;
@@ -209,12 +339,12 @@ void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 }
 
 void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
-				uint16_t sport, uint16_t dport, uint8_t flags,
-				uint32_t seq, uint32_t ack,
-				size_t options_size, const char *options,
-				size_t payload_size, const char *payload)
+			uint16_t sport, uint16_t dport, uint8_t flags,
+			uint32_t seq, uint32_t ack,
+			size_t options_size, const uint8_t *options,
+			size_t payload_size, const char *payload)
 {
-	char packet[SNAPLEN];
+	uint8_t packet[SNAPLEN];
 	struct ip *ip;
 	struct tcphdr *tcp;
 	ssize_t size;
@@ -259,102 +389,11 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	}
 }
 
-/*
-static void *read_updates(void *arg)
-{
-	struct update update;
-	ssize_t size;
-
-	(void)arg;
-
-	size = read(update_socket, &update, sizeof(update));
-	clock_gettime(CLOCK_REALTIME, &timestamp);
-	if (size < 0) {
-		perror("Receiving update");
-		exit(EXIT_FAILURE);
-	}
-	if (recovering) {
-		//message("Recovered.");
-		state->tcpr.delta = update.tcpr.delta;
-		fprintf(stderr, "Peer has acknowledged %" PRIu32 " bytes.\n",
-				ntohl(update.tcpr.peer_ack)
-					- ntohl(state->tcpr.peer_ack));
-		fprintf(stderr, "Delta is now %" PRIu32 ".\n",
-				state->tcpr.delta);
-	} else {
-		//message("Connected.");
-		pthread_mutex_lock(&flags_lock);
-		memcpy(state, &update, sizeof(update));
-		pthread_cond_broadcast(&state_ready);
-		pthread_mutex_unlock(&flags_lock);
-	}
-
-	while ((size = read(update_socket, &update, sizeof(update))) > 0) {
-		clock_gettime(CLOCK_REALTIME, &timestamp);
-		if (!update.tcpr.flags) {
-			//message("Filter needs recovery.");
-			if (sendto(update_socket, state, sizeof(*state), 0,
-					(struct sockaddr *)&filter_address,
-					sizeof(filter_address)) < 0) {
-				perror("Sending state");
-				exit(EXIT_FAILURE);
-			}
-			//message_now("Sent state to filter.");
-		} else if (update.tcpr.flags & TCPR_TIME_WAIT) {
-			//message("Entering TIME_WAIT.");
-			pthread_mutex_lock(&flags_lock);
-			state->tcpr.flags |= TCPR_FINISHED;
-			pthread_mutex_unlock(&flags_lock);
-			if (sendto(update_socket, state, sizeof(*state), 0,
-					(struct sockaddr *)&filter_address,
-					sizeof(filter_address)) < 0) {
-				perror("Removing filter state");
-				exit(EXIT_FAILURE);
-			}
-			//message_now("Removed filter state.");
-			return NULL;
-		} else {
-			//message("Unexpected update.");
-		}
-	}
-	if (size < 0) {
-		perror("Receiving update");
-		exit(EXIT_FAILURE);
-	}
-	return NULL;
-}*/
-
-void setup_update_connection(void)
-{
-	struct sockaddr_un addr;
-
-	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
-	if (update_socket < 0) {
-		perror("Creating update socket");
-		exit(EXIT_FAILURE);
-	}
-
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, application_path, sizeof(addr.sun_path) - 1);
-	unlink(application_path);
-	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		perror("Binding update socket");
-		exit(EXIT_FAILURE);
-	}
-
-	memset(&filter_address, 0, sizeof(filter_address));
-	filter_address.sun_family = AF_UNIX;
-	strncpy(filter_address.sun_path, filter_path,
-		sizeof(filter_address.sun_path) - 1);
-
-	//pthread_create(&update_thread, NULL, read_updates, NULL);
-}
-
 void send_update(uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint16_t peer_mss, uint8_t peer_ws,
-				uint32_t delta, uint32_t flags)
+			uint16_t peer_port, uint16_t port,
+			uint32_t peer_ack, uint32_t ack,
+			uint16_t peer_mss, uint8_t peer_ws,
+			uint32_t delta, uint32_t flags)
 {
 	struct update update;
 
@@ -369,18 +408,15 @@ void send_update(uint32_t peer_address, uint32_t address,
 	update.tcpr.delta = delta;
 	update.tcpr.flags = flags;
 
-	sendto(update_socket, &update,
-						sizeof(update), 0,
-						(struct sockaddr *)
-						&filter_address,
-						sizeof(filter_address));
+	sendto(update_socket, &update, sizeof(update), 0,
+		(struct sockaddr *)&filter_address, sizeof(filter_address));
 }
 
 void recv_update(uint32_t peer_address, uint32_t address,
-				uint16_t peer_port, uint16_t port,
-				uint32_t peer_ack, uint32_t ack,
-				uint16_t peer_mss, uint8_t peer_ws,
-				uint32_t delta, uint32_t flags)
+			uint16_t peer_port, uint16_t port,
+			uint32_t peer_ack, uint32_t ack,
+			uint16_t peer_mss, uint8_t peer_ws,
+			uint32_t delta, uint32_t flags)
 {
 	struct update update;
 	ssize_t size;
@@ -388,8 +424,7 @@ void recv_update(uint32_t peer_address, uint32_t address,
 	size = read(update_socket, &update, sizeof(update));
 
 	expect(size, sizeof(update), "Size of update");
-	expect(ntohl(update.peer_address), peer_address,
-		"Update peer address");
+	expect(ntohl(update.peer_address), peer_address, "Update peer address");
 	expect(ntohl(update.address), address, "Update address");
 	expect(ntohs(update.tcpr.peer_port), peer_port, "Update peer port");
 	expect(ntohs(update.tcpr.port), port, "Update port");
@@ -401,136 +436,7 @@ void recv_update(uint32_t peer_address, uint32_t address,
 	if (flags & TCPR_HAVE_PEER_WS)
 		expect(update.tcpr.peer_ws, peer_ws,
 			"Update peer window scaling");
-	expect(ntohl(update.tcpr.ack), ack,
-		"Update acknowledgment");
+	expect(ntohl(update.tcpr.ack), ack, "Update acknowledgment");
 	expect(update.tcpr.delta, delta, "Update delta");
-
 	expect(update.tcpr.flags, flags, "Update flags");
-}
-
-void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
-						uint16_t sport, uint16_t dport, 
-						uint32_t start_seq, uint32_t start_ack,
-						size_t options_size, const char *options,
-						uint16_t peer_mss, uint8_t peer_ws) {
-
-    uint32_t option_flags = 0;
-    if (peer_mss)
-        option_flags |= TCPR_HAVE_PEER_MSS;
-    if (peer_ws)
-        option_flags |= TCPR_HAVE_PEER_WS;
-
-	setup_update_connection();
-
-	fprintf(stderr, "       Peer: SYN\n");
-	send_segment(external_log, saddr, faddr, sport, dport,
-			TH_SYN, start_seq, 0, options_size, options, 0, NULL);
-	recv_segment(internal_log, saddr, daddr, sport, dport,
-			TH_SYN, start_seq, 0, options_size, options, 0, NULL);
-
-	fprintf(stderr, "Application: SYN ACK\n");
-	send_segment(internal_log, daddr, saddr, dport, sport,
-			TH_SYN | TH_ACK, start_ack, start_seq + 1,
-			0, NULL, 0, NULL);
-	recv_segment(external_log, faddr, saddr, dport, sport,
-			TH_SYN | TH_ACK, start_ack, start_seq + 1,
-			0, NULL, 0, NULL);
-
-	fprintf(stderr, "       Peer: ACK\n");
-	send_segment(external_log, saddr, faddr, sport, dport,
-			TH_ACK, start_seq + 1, start_ack + 1,
-			0, NULL, 0, NULL);
-	recv_segment(internal_log, saddr, daddr, sport, dport,
-			TH_ACK, start_seq + 1, start_ack + 1,
-			0, NULL, 0, NULL);
-
-	fprintf(stderr, "     Filter: update\n");
-	recv_update(saddr, daddr, sport, dport,
-			start_ack + 1, start_seq + 1, peer_mss, peer_ws, 0, TCPR_HAVE_ACK | option_flags);
-}
-
-void teardown_connection(uint32_t peer_address, uint32_t address,
-							uint16_t peer_port, uint16_t port,
-							uint32_t peer_ack, uint32_t ack,
-							uint32_t delta) {
-	fprintf(stderr, "Application: update (remove state)\n");
-	send_update(peer_address, address, peer_port, port,
-			peer_ack, ack, 0, 0, delta, TCPR_FINISHED);
-}
-
-void setup_test(char *device, char *log_name) {
-	char *external_log_suffix = "-external.pcap";
-	char *internal_log_suffix = "-internal.pcap";
-
-	char *external_log_name = (char *) malloc (strlen(log_name) + strlen(external_log_suffix) + 1);
-	char *internal_log_name = (char *) malloc (strlen(log_name) + strlen(internal_log_suffix) + 1);
-
-	strcpy(external_log_name, log_name);
-   	strcat(external_log_name, external_log_suffix);
-
-	strcpy(internal_log_name, log_name);
-   	strcat(internal_log_name, internal_log_suffix);
-
-	tun = open_tun(device);
-	external_log = open_log(external_log_name);
-	internal_log = open_log(internal_log_name);
-
-	free(external_log_name);
-	free(internal_log_name);
-
-	test_options_size = 8;
-	peer_mss = 0x0640;
-	peer_ws = 0x02;
-
-	test_options = (char *) malloc(test_options_size);
-	*((uint32_t *)test_options) = htonl(0x02040000 | peer_mss);
-	*((uint32_t *)(test_options+4)) = htonl(0x03030000 | (((int)peer_ws) << 8));
-}
-
-void cleanup_test() {
-	if (fclose(external_log)) {
-		perror("Closing external log file");
-		exit(EXIT_FAILURE);
-	}
-	if (fclose(internal_log)) {
-		perror("Closing internal log file");
-		exit(EXIT_FAILURE);
-	}
-	if (close(tun)) {
-		perror("Closing TUN device");
-		exit(EXIT_FAILURE);
-	}
-
-	if (test_options) {
-		free(test_options);
-		test_options = NULL;
-	}
-}
-
-void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
-						uint16_t sport, uint16_t dport, 
-						uint32_t new_seq, uint32_t seq, uint32_t ack,
-						size_t options_size, const char *options,
-						uint16_t peer_mss, uint8_t peer_ws, uint32_t flags) {
-	fprintf(stderr, "Application: SYN (recovery)\n");
-	send_segment(internal_log, saddr, daddr, sport, dport,
-			TH_SYN, new_seq, 0, options_size, options, 0, NULL);
-
-	fprintf(stderr, "     Filter: SYN ACK\n");
-	recv_segment(internal_log, daddr, saddr, dport, sport,
-			TH_SYN | TH_ACK, ack, new_seq + 1,
-			options_size, options, 0, NULL);
-
-	fprintf(stderr, "     Filter: update\n");
-	recv_update(daddr, saddr, dport, sport,
-			seq + 1, ack + 1, peer_mss, peer_ws,
-			(new_seq + 1) - (seq + 1), flags);
-
-	fprintf(stderr, "Application: ACK\n");
-	send_segment(internal_log, saddr, daddr, sport, dport,
-			TH_ACK, new_seq + 1, ack + 1,
-			0, NULL, 0, NULL);
-	recv_segment(external_log, faddr, daddr, sport, dport,
-			TH_ACK, seq + 1, ack + 1,
-			0, NULL, 0, NULL);
 }

@@ -100,8 +100,8 @@ static void log_state(struct state *state)
 	struct timespec tp;
 
 	clock_gettime(CLOCK_REALTIME, &tp);
-        fprintf(state_log, "%lf:\n",  (double)tp.tv_sec
-                                        + (double)tp.tv_nsec / 1000000000.0);
+	fprintf(state_log, "%lf:\n", (double)tp.tv_sec + (double)tp.tv_nsec
+						/ 1000000000.0);
 	fprintf(state_log, "  Peer address:        %" PRIx32 "\n",
 						ntohl(state->peer_address));
 	fprintf(state_log, "  Peer port:           %" PRIu16 "\n",
@@ -159,7 +159,7 @@ static void log_statistics(void)
 
 static uint32_t shorten(uint32_t n)
 {
-        return (n >> 16) + (n & 0xffff);
+	return (n >> 16) + (n & 0xffff);
 }
 
 static uint32_t rotate(uint32_t n, size_t bits)
@@ -291,12 +291,12 @@ static void inject(struct ip *ip, FILE *log)
 	++injected;
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = ip->ip_dst.s_addr;
+	addr.sin_addr.s_addr = ip->ip_dst.s_addr;
 	if (debugging)
 		log_packet(ip, log);
-        if (sendto(raw_socket, ip, ntohs(ip->ip_len), 0,
+	if (sendto(raw_socket, ip, ntohs(ip->ip_len), 0,
 			(struct sockaddr *)&addr, len) < 0)
-                perror("Injecting packet");
+		perror("Injecting packet");
 }
 
 static void make_packet(struct ip *ip, uint16_t size,
@@ -428,7 +428,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 		if (flags & update_flags)
 			send_update(state);
 		return 0;
-        } else {
+	} else {
 		if (debugging)
 			log_packet(ip, internal_log);
 		internal_address = ip->ip_src.s_addr;
