@@ -505,8 +505,9 @@ int main(int argc, char **argv)
 	struct sockaddr_un addr;
 	struct pollfd fds[2];
 	struct update update;
+	uint16_t queue_number = 0;
 
-	while ((ret = getopt(argc, argv, "i:e:a:f:s:dp?")) != -1)
+	while ((ret = getopt(argc, argv, "i:e:a:f:q:s:dp?")) != -1)
 		switch (ret) {
 		case 'i':
 			internal_host = optarg;
@@ -519,6 +520,9 @@ int main(int argc, char **argv)
 			break;
 		case 'f':
 			filter_path = optarg;
+			break;
+		case 'q':
+			queue_number = (uint16_t)atoi(optarg);
 			break;
 		case 's':
 			statistics_interval = (unsigned)atol(optarg);
@@ -542,6 +546,8 @@ int main(int argc, char **argv)
 				"Send updates to the UNIX socket PATH.\n");
 			fprintf(stderr, "  -f PATH      "
 				"Receive updates at the UNIX socket PATH.\n");
+			fprintf(stderr, "  -q NUMBER    "
+				"Get packets from netfilter queue NUMBER.\n");
 			fprintf(stderr, "  -s INTERVAL  "
 				"Print statistics every INTERVAL packets.\n");
 			fprintf(stderr, "  -d           "
@@ -635,7 +641,7 @@ int main(int argc, char **argv)
 		fputs("Error binding the queue handler.\n", stderr);
 		exit(EXIT_FAILURE);
 	}
-	q = nfq_create_queue(h, 0, handler, NULL);
+	q = nfq_create_queue(h, queue_number, handler, NULL);
 	if (!q) {
 		fputs("Error creating the incoming queue.\n", stderr);
 		exit(EXIT_FAILURE);
