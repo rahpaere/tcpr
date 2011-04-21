@@ -1,7 +1,7 @@
 EXTRA_DIST = LICENSE netperf-2.4.5-tcpr.patch
 AM_CFLAGS = -D_BSD_SOURCE -Wall -Wextra
 
-include_HEADERS = tcpr.h
+include_HEADERS = tcpr.h md5/md5.h md5/global.h
 bin_PROGRAMS =
 
 TESTS = test/tcpr-test-setup-teardown \
@@ -42,7 +42,7 @@ test_tcpr_test_simultaneous_recovery_SOURCES = \
 
 if WITH_NETFILTER
   bin_PROGRAMS += tcpr-netfilter
-  tcpr_netfilter_SOURCES = tcpr-netfilter.c tcpr.c
+  tcpr_netfilter_SOURCES = tcpr-netfilter.c tcpr.c md5/md5.c
 endif
 
 if WITH_CHAT

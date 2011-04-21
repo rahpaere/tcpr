@@ -16,6 +16,7 @@ enum tcpr_flags {
 	TCPR_HAVE_PEER_MSS = 0x80,
 	TCPR_HAVE_PEER_WS = 0x100,
 	TCPR_FINISHED = 0x200,
+	TCPR_HAVE_MD5 = 0x400,
 };
 
 enum tcpr_result {
