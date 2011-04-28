@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/times.h>
@@ -19,6 +20,8 @@
 
 #include <libnetfilter_queue/libnetfilter_queue.h>
 #include <linux/netfilter.h>
+
+#define SNAPLEN 65536
 
 struct state {
 	struct state *next;
@@ -38,7 +41,7 @@ struct segment {
 	uint8_t options[40];
 };
 
-struct log_header {
+static struct {
 	uint32_t magic;
 	uint16_t major;
 	uint16_t minor;
@@ -46,7 +49,7 @@ struct log_header {
 	uint32_t sigfigs;
 	uint32_t caplen;
 	uint32_t network;
-};
+} log_header = { 0xa1b2c3d4, 2, 4, 0, 0, SNAPLEN, 101 };
 
 struct log_packet {
 	uint32_t seconds;
@@ -60,6 +63,8 @@ static const int drop_flags = TCPR_SPURIOUS_FIN | TCPR_SPURIOUS_RST
 static const int update_flags =
 	TCPR_PEER_ACK | TCPR_CLOSING | TCPR_RECOVERY | TCPR_NO_STATE;
 
+static unsigned long statistics_at_end;
+
 static int debugging;
 static unsigned long packets;
 static unsigned long segments;
@@ -69,8 +74,13 @@ static unsigned long injected;
 static unsigned long errors;
 static long ticks_per_second;
 
-static int raw_socket;
-static int update_socket;
+const char *external_host = NULL;
+const char *internal_host = NULL;
+const char *filter_path = "/tmp/tcpr-filter.socket";
+const char *application_path = "/tmp/tcpr-application.socket";
+
+static int raw_socket = -1;
+static int update_socket = -1;
 static uint32_t internal_address;
 static uint32_t external_address;
 struct sockaddr_un application_address;
@@ -78,6 +88,12 @@ struct sockaddr_un application_address;
 static FILE *internal_log;
 static FILE *external_log;
 static FILE *state_log;
+
+static struct nfq_handle *h;
+static struct nfq_q_handle *q;
+static int netfilter_fd;
+static uint16_t queue_number;
+static nfq_callback *handler;
 
 static void log_packet(struct ip *ip, FILE *log)
 {
@@ -470,6 +486,10 @@ static int passthrough(struct nfq_q_handle *q, struct nfgenmsg *m,
 
 	id = ntohl((nfq_get_msg_packet_hdr(d))->packet_id);
 	nfq_get_payload(d, (char **)&ip);
+	if (debugging) {
+		log_packet(ip, internal_log);
+		log_packet(ip, external_log);
+	}
 	++delivered;
 	if (nfq_set_verdict(q, id, NF_ACCEPT, ntohs(ip->ip_len),
 				(unsigned char *)ip) < 0)
@@ -480,32 +500,154 @@ static int passthrough(struct nfq_q_handle *q, struct nfgenmsg *m,
 static void terminate(int s)
 {
 	(void)s;
+
+	if (statistics_at_end)
+		log_statistics();
+
+	if (handler != passthrough) {
+		if (close(update_socket) < 0) {
+			perror("Closing update socket");
+			exit(EXIT_FAILURE);
+		}
+		unlink(filter_path);
+
+		if (close(raw_socket) < 0) {
+			perror("Closing raw socket");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	nfq_destroy_queue(q);
+	nfq_close(h);
+
+	if (debugging) {
+		fclose(internal_log);
+		fclose(external_log);
+		fclose(state_log);
+	}
+
+	exit(EXIT_SUCCESS);
+}
+
+static void setup_debugging(void)
+{
+	state_log = fopen("tcpr-state.log", "w");
+	if (!state_log) {
+		perror("Opening state log");
+		exit(EXIT_FAILURE);
+	}
+
+	internal_log = fopen("tcpr-internal.pcap", "w");
+	if (!internal_log) {
+		perror("Opening internal log");
+		exit(EXIT_FAILURE);
+	}
+	fwrite(&log_header, sizeof(log_header), 1, internal_log);
+	fflush(internal_log);
+
+	external_log = fopen("tcpr-external.pcap", "w");
+	if (!external_log) {
+		perror("Opening external log");
+		exit(EXIT_FAILURE);
+	}
+	fwrite(&log_header, sizeof(log_header), 1, external_log);
+	fflush(external_log);
+}
+
+static void setup_addresses(void)
+{
+	struct addrinfo *ai;
+	struct addrinfo hints;
+	int ret;
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_INET;
+
+	ret = getaddrinfo(internal_host, NULL, &hints, &ai);
+	if (ret) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
+		exit(EXIT_FAILURE);
+	}
+	internal_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
+	freeaddrinfo(ai);
+
+	ret = getaddrinfo(external_host, NULL, &hints, &ai);
+	if (ret) {
+		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
+		exit(EXIT_FAILURE);
+	}
+	external_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
+	freeaddrinfo(ai);
+}
+
+static void setup_update_connection(void)
+{
+	struct sockaddr_un addr;
+
+	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
+	if (update_socket < 0) {
+		perror("Opening update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_UNIX;
+	strncpy(addr.sun_path, filter_path, sizeof(addr.sun_path) - 1);
+	unlink(filter_path);
+	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("Binding update socket");
+		exit(EXIT_FAILURE);
+	}
+
+	memset(&application_address, 0, sizeof(application_address));
+	application_address.sun_family = AF_UNIX;
+	strncpy(application_address.sun_path, application_path,
+		sizeof(application_address.sun_path) - 1);
+}
+
+static void setup_raw_socket(void)
+{
+	raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
+	if (raw_socket < 0) {
+		perror("Opening raw socket");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void setup_netfilter(void)
+{
+	h = nfq_open();
+	if (!h) {
+		fputs("Error opening the queue interface.\n", stderr);
+		exit(EXIT_FAILURE);
+	}
+	nfq_unbind_pf(h, AF_INET);
+	if (nfq_bind_pf(h, AF_INET) < 0) {
+		fputs("Error binding the queue handler.\n", stderr);
+		exit(EXIT_FAILURE);
+	}
+	q = nfq_create_queue(h, queue_number, handler, NULL);
+	if (!q) {
+		fputs("Error creating the incoming queue.\n", stderr);
+		exit(EXIT_FAILURE);
+	}
+	if (nfq_set_mode(q, NFQNL_COPY_PACKET, SNAPLEN) < 0) {
+		fputs("Error setting up the incoming queue.\n", stderr);
+		exit(EXIT_FAILURE);
+	}
+	netfilter_fd = nfq_fd(h);
 }
 
 int main(int argc, char **argv)
 {
-	const char *external_host = NULL;
-	const char *internal_host = NULL;
-	const char *filter_path = "/tmp/tcpr-filter.socket";
-	const char *application_path = "/tmp/tcpr-application.socket";
-	char packet[65536];
-	int netfilter_fd;
+	char packet[SNAPLEN];
 	int ret;
-	nfq_callback *handler = handle_packet;
 	ssize_t size;
-	struct addrinfo *ai;
-	struct addrinfo hints;
-	struct nfq_handle *h;
-	struct nfq_q_handle *q;
-	struct log_header log_header;
 	unsigned long statistics_interval = 0;
-	unsigned long statistics_at_end = 0;
 	struct sigaction sa;
 	struct sigaction old;
-	struct sockaddr_un addr;
 	struct pollfd fds[2];
 	struct update update;
-	uint16_t queue_number = 0;
 
 	while ((ret = getopt(argc, argv, "i:e:a:f:q:s:dp?")) != -1)
 		switch (ret) {
@@ -559,103 +701,21 @@ int main(int argc, char **argv)
 			exit(EXIT_FAILURE);
 		}
 
+	if (!handler)
+		handler = handle_packet;
+
 	ticks_per_second = sysconf(_SC_CLK_TCK);
 
-	if (debugging) {
-		state_log = fopen("tcpr-state.log", "w");
-		if (!state_log) {
-			perror("Opening state log");
-			exit(EXIT_FAILURE);
-		}
+	if (debugging)
+		setup_debugging();
 
-		log_header.magic = 0xa1b2c3d4;
-		log_header.major = 2;
-		log_header.minor = 4;
-		log_header.zone = 0;
-		log_header.sigfigs = 0;
-		log_header.caplen = sizeof(packet);
-		log_header.network = 101;
-
-		internal_log = fopen("tcpr-internal.pcap", "w");
-		if (!internal_log) {
-			perror("Opening internal log");
-			exit(EXIT_FAILURE);
-		}
-		fwrite(&log_header, sizeof(log_header), 1, internal_log);
-		fflush(internal_log);
-
-		external_log = fopen("tcpr-external.pcap", "w");
-		if (!external_log) {
-			perror("Opening external log");
-			exit(EXIT_FAILURE);
-		}
-		fwrite(&log_header, sizeof(log_header), 1, external_log);
-		fflush(external_log);
+	if (handler != passthrough) {
+		setup_addresses();
+		setup_update_connection();
+		setup_raw_socket();
 	}
 
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-
-	ret = getaddrinfo(internal_host, NULL, &hints, &ai);
-	if (ret) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
-		exit(EXIT_FAILURE);
-	}
-	internal_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
-	freeaddrinfo(ai);
-
-	ret = getaddrinfo(external_host, NULL, &hints, &ai);
-	if (ret) {
-		fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(ret));
-		exit(EXIT_FAILURE);
-	}
-	external_address = ((struct sockaddr_in *)ai->ai_addr)->sin_addr.s_addr;
-	freeaddrinfo(ai);
-
-	update_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
-	if (update_socket < 0) {
-		perror("Opening update socket");
-		exit(EXIT_FAILURE);
-	}
-	memset(&addr, 0, sizeof(addr));
-	addr.sun_family = AF_UNIX;
-	strncpy(addr.sun_path, filter_path, sizeof(addr.sun_path) - 1);
-	unlink(filter_path);
-	if (bind(update_socket, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		perror("Binding update socket");
-		exit(EXIT_FAILURE);
-	}
-
-	memset(&application_address, 0, sizeof(application_address));
-	application_address.sun_family = AF_UNIX;
-	strncpy(application_address.sun_path, application_path,
-		sizeof(application_address.sun_path) - 1);
-
-	h = nfq_open();
-	if (!h) {
-		fputs("Error opening the queue interface.\n", stderr);
-		exit(EXIT_FAILURE);
-	}
-	nfq_unbind_pf(h, AF_INET);
-	if (nfq_bind_pf(h, AF_INET) < 0) {
-		fputs("Error binding the queue handler.\n", stderr);
-		exit(EXIT_FAILURE);
-	}
-	q = nfq_create_queue(h, queue_number, handler, NULL);
-	if (!q) {
-		fputs("Error creating the incoming queue.\n", stderr);
-		exit(EXIT_FAILURE);
-	}
-	if (nfq_set_mode(q, NFQNL_COPY_PACKET, sizeof(packet)) < 0) {
-		fputs("Error setting up the incoming queue.\n", stderr);
-		exit(EXIT_FAILURE);
-	}
-
-	raw_socket = socket(AF_INET, SOCK_RAW, IPPROTO_RAW);
-	if (raw_socket < 0) {
-		perror("Opening raw socket");
-		exit(EXIT_FAILURE);
-	}
+	setup_netfilter();
 
 	memset(&sa, 0, sizeof(sa));
 	memset(&old, 0, sizeof(old));
@@ -664,8 +724,13 @@ int main(int argc, char **argv)
 		perror("Setting up signal handling");
 		exit(EXIT_FAILURE);
 	}
+	if (sigaction(SIGTERM, &sa, &old) < 0) {
+		perror("Setting up signal handling");
+		exit(EXIT_FAILURE);
+	}
 
-	netfilter_fd = nfq_fd(h);
+	if (setpriority(PRIO_PROCESS, 0, -20) < 0)
+		perror("Setting priority");
 
 	fds[0].fd = update_socket;
 	fds[0].events = POLLIN;
@@ -700,34 +765,13 @@ int main(int argc, char **argv)
 			} else {
 				nfq_handle_packet(h, packet, size);
 				++packets;
-				if (statistics_interval && packets % statistics_interval == 0)
+				if (statistics_interval &&
+						packets % statistics_interval
+									== 0)
 					log_statistics();
 			}
 		}
 	}
 
-	if (statistics_at_end)
-		log_statistics();
-
-	if (close(update_socket) < 0) {
-		perror("Closing update socket");
-		exit(EXIT_FAILURE);
-	}
-	unlink(filter_path);
-
-	if (close(raw_socket) < 0) {
-		perror("Closing raw socket");
-		exit(EXIT_FAILURE);
-	}
-
-	nfq_destroy_queue(q);
-	nfq_close(h);
-
-	if (debugging) {
-		fclose(internal_log);
-		fclose(external_log);
-		fclose(state_log);
-	}
-
-	return EXIT_SUCCESS;
+	return EXIT_FAILURE;
 }
