@@ -1,6 +1,6 @@
-diff -ru netperf-2.4.5-old/src/netlib.c netperf-2.4.5/src/netlib.c
+diff -Naur netperf-2.4.5-old/src/netlib.c netperf-2.4.5/src/netlib.c
 --- netperf-2.4.5-old/src/netlib.c	2009-05-27 18:27:34.000000000 -0400
-+++ netperf-2.4.5/src/netlib.c	2011-04-08 08:23:56.639384597 -0400
++++ netperf-2.4.5/src/netlib.c	2011-04-23 20:37:31.274404494 -0400
 @@ -64,6 +64,7 @@
  #  define NSIG _NSIG
  #endif /* MPE */
@@ -16,15 +16,15 @@ diff -ru netperf-2.4.5-old/src/netlib.c netperf-2.4.5/src/netlib.c
 +int tcpr_enabled = 1;
 +int tcpr_enable_updates = 1;
 +int tcpr_enable_checkpointing = 1;
-+struct sockaddr_un tcpr_filter = {AF_UNIX, "tcpr-filter.socket"};
-+struct sockaddr_un tcpr_application = {AF_UNIX, "tcpr-application.socket"};
++struct sockaddr_un tcpr_filter = {AF_UNIX, "/tmp/tcpr-filter.socket"};
++struct sockaddr_un tcpr_application = {AF_UNIX, "/tmp/tcpr-application.socket"};
 +
  /* these are to allow netperf to be run easily through those evil,
     end-to-end breaking things known as firewalls */
  char local_data_port[10];
-diff -ru netperf-2.4.5-old/src/netlib.h netperf-2.4.5/src/netlib.h
+diff -Naur netperf-2.4.5-old/src/netlib.h netperf-2.4.5/src/netlib.h
 --- netperf-2.4.5-old/src/netlib.h	2008-10-30 16:48:46.000000000 -0400
-+++ netperf-2.4.5/src/netlib.h	2011-04-08 07:15:20.532156165 -0400
++++ netperf-2.4.5/src/netlib.h	2011-04-23 20:37:31.274404494 -0400
 @@ -16,6 +16,8 @@
  # include "missing/getaddrinfo.h"
  #endif
@@ -47,9 +47,9 @@ diff -ru netperf-2.4.5-old/src/netlib.h netperf-2.4.5/src/netlib.h
  /* these are to allow netperf to be run easily through those evil,
     end-to-end breaking things known as firewalls */
  extern char local_data_port[10];
-diff -ru netperf-2.4.5-old/src/nettest_bsd.c netperf-2.4.5/src/nettest_bsd.c
+diff -Naur netperf-2.4.5-old/src/nettest_bsd.c netperf-2.4.5/src/nettest_bsd.c
 --- netperf-2.4.5-old/src/nettest_bsd.c	2009-06-03 20:31:15.000000000 -0400
-+++ netperf-2.4.5/src/nettest_bsd.c	2011-04-08 08:10:45.696384168 -0400
++++ netperf-2.4.5/src/nettest_bsd.c	2011-04-23 20:37:31.286404064 -0400
 @@ -163,6 +163,16 @@
  #include <sys/sendfile.h>
  #endif /* HAVE_SENDFILE && (__linux || __sun) */
