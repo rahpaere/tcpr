@@ -1,6 +1,5 @@
 #include "tcpr.h"
-#include "md5/global.h"
-#include "md5/md5.h"
+#include "md5util.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -195,54 +194,6 @@ static void compute_tcp_checksum(struct ip *ip, struct tcphdr *tcp)
 	tcp->th_sum = ~shorten(shorten(sum));
 }
 
-static void compute_md5_checksum(struct ip *ip, struct tcphdr *tcp)
-{
-    MD5_CTX context;
-    uint8_t digest[16];
-    uint16_t sum;
-    uint32_t *data;
-    uint32_t data_len;
-	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
-	uint8_t *option = (uint8_t *)(tcp + 1);
-
-    MD5Init (&context);
-
-    // TCP pseudo-header
-    MD5Update (&context, &(ip->ip_src.s_addr), sizeof(ip->ip_src.s_addr));
-    MD5Update (&context, &(ip->ip_dst.s_addr), sizeof(ip->ip_dst.s_addr));
-    MD5Update (&context, &(ip->ip_p), sizeof(ip->ip_p)); //TODO: RFC says this needs to be 0 padded. To how many bytes?
-    MD5Update (&context, &(ip->ip_len), sizeof(ip->ip_len));
-
-    // TCP header
-    sum = tcp->th_sum;
-    tcp->th_sum = 0;
-    MD5Update (&context, tcp, sizeof(*tcp));
-    tcp->th_sum = sum;
-
-
-    // TCP segment data
-    data = (uint32_t*)(tcp)+tcp->th_off;
-    data_len = ntohs(ip->ip_len) - ip->ip_hl*4 - tcp->th_off*4;
-    MD5Update (&context, data, data_len);
-
-    // Password
-    MD5Update (&context, "password", strlen("password")); //TODO: read password from a file
-
-    // Compute digest
-    MD5Final (digest, &context);
-
-    // Set the checksum
-	while (option < end && *option != TCPOPT_EOL)
-		switch (*option) {
-        case 19:
-            memcpy(option+2, digest, 16);
-		default:
-            option += option[1];
-			break;
-		}
-
-}
-
 static struct state **hash(uint32_t a, uint32_t b, uint32_t c)
 {
 	static struct state *buckets[1 << 8];
@@ -321,14 +272,28 @@ static void drop(struct nfq_q_handle *q, int id)
 }
 
 static void deliver(struct nfq_q_handle *q, int id, struct ip *ip,
-			struct tcphdr *tcp, FILE *log, int flags)
+			struct tcphdr *tcp, FILE *log)
 {
-	++delivered;
-	if (!tcp->th_sum)
-		compute_tcp_checksum(ip, tcp);
+	uint8_t digest[16];
+	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
+	uint8_t *option = (uint8_t *)(tcp + 1);
 
-    if (flags & TCPR_HAVE_MD5)
-        compute_md5_checksum(ip, tcp);
+	++delivered;
+    // Rewrite MD5 checksum if the option exists
+    while (option < end && *option != TCPOPT_EOL){
+        switch (*option) {
+        case 19:
+            compute_md5_checksum(ip, tcp, digest);
+            memcpy(option+2, digest, 16);
+            tcp->th_sum = 0;
+        default:
+            option += option[1];
+            break;
+        }
+    }
+
+    if (!tcp->th_sum)
+		compute_tcp_checksum(ip, tcp);
 
 	if (debugging)
 		log_packet(ip, log);
@@ -382,11 +347,33 @@ static void inject_acknowledgment(struct state *state)
 
 static void inject_handshake(struct state *state)
 {
-	struct segment s;
+	struct segment s = {0};
+	uint8_t digest[16];
+	uint8_t *end;
+	uint8_t *option;
+
 	tcpr_make_handshake(&s.tcp, &state->tcpr);
 	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
 			state->peer_address, internal_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
+
+    // Set MD5 checksum if it's in the state
+	end = (uint8_t *)((uint32_t *)&s.tcp + s.tcp.th_off);
+	option = (uint8_t *)(&s.tcp + 1);
+    if (state->tcpr.flags & TCPR_HAVE_MD5) {
+        while (option < end && *option != TCPOPT_EOL){
+            switch (*option) {
+            case 19:
+                compute_md5_checksum(&s.ip, &s.tcp, digest);
+                memcpy(option+2, digest, 16);
+                s.tcp.th_sum = 0;
+            default:
+                option += option[1];
+                break;
+            }
+        }
+    }
+
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, internal_log);
 }
@@ -477,7 +464,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 			drop(q, id);
 		} else {
 			set_internal_destination(ip, tcp);
-			deliver(q, id, ip, tcp, internal_log, flags);
+			deliver(q, id, ip, tcp, internal_log);
 		}
 		if (flags & update_flags)
 			send_update(state);
@@ -501,7 +488,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 			drop(q, id);
 		} else {
 			set_external_source(ip, tcp);
-			deliver(q, id, ip, tcp, external_log, flags);
+			deliver(q, id, ip, tcp, external_log);
 		}
 		if (flags & TCPR_SPURIOUS_FIN)
 			inject_reset(state);
