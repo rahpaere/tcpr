@@ -28,13 +28,15 @@ Finally, the following are often useful for testing and debugging:
 
 Once the dependencies are installed, build the project.
 
-  $ ./configure && make
+  $ mkdir tcpr-build
+  $ cd tcpr-build
+  $ ../tcpr/configure && make
 
 Two programs result: tcpr-netfilter, the packet filter, and tcpr-chat,
 the demonstration program.  In order to run, tcpr-netfilter requires
 some special privileges.
 
-  # setcap cap_net_admin,cap_net_raw+eip tcpr-netfilter
+  # setcap cap_net_admin,cap_net_raw,cap_sys_nice+eip tcpr-netfilter
 
 Whenever you rebuild tcpr-netfilter, the overwitten file will lose its
 capabilities and you will need to set them again.  However, you will be
@@ -66,7 +68,7 @@ capture the appropriate packets and send them to userspace for the filter.
 
 To double check, list the current rules.
 
-  # iptables -L -n
+  # iptables -nL
 
 Now run the filter.  It needs to know the internal address of the
 application and the external address to map it to.
@@ -85,7 +87,7 @@ external address.
 
 Now chat back and forth between the two endpoints.  You can kill the
 fault-tolerant application with control-C and recover it by running
-the same command-line again; you can also kill and recovery the filter
+the same command-line again; you can also kill and recover the filter
 in the same way, or even kill both and recover them simultaneously.
 When you are finished at either endpoint, type control-D.  When both
 ends have finished, they will exit.  Finally, kill the filter.
@@ -103,8 +105,8 @@ To clean up, remove the addresses and filter rules you added.
   # ip addr del dev lo 127.0.0.2/32
   # ip addr del dev lo 127.0.0.3/32
 
-  # iptables -A OUTPUT -s 127.0.0.3 -j NFQUEUE
-  # iptables -A INPUT -d 127.0.0.2 -j NFQUEUE
+  # iptables -D OUTPUT -s 127.0.0.3 -j NFQUEUE
+  # iptables -D INPUT -d 127.0.0.2 -j NFQUEUE
 
 Sometimes, if the application crashes but you move on to
 something else and never recover it, you will find its state file,
@@ -164,10 +166,9 @@ demonstration.  On the peer machine, launch the server side.
 
   # netserver
 
-On the application machine, launch the filter.  It is important that
-the filter have high scheduling priority to measure good performance.
+On the application machine, launch the filter.
 
-  # nice -n -20 su USERNAME -c 'tcpr-netfilter -i 127.0.0.3 -e 127.0.0.2'
+  # tcpr-netfilter -i 127.0.0.3 -e 127.0.0.2
 
 In another terminal on the application machine, launch the application,
 that is, the netperf test.  It will communicate with the peer directly

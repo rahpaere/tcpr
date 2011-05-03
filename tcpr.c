@@ -61,7 +61,8 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 	}
 
 	if (tcp->th_flags & TH_ACK) {
-		if (!(state->flags & TCPR_HAVE_PEER_ACK))
+		if (!(state->flags & TCPR_HAVE_PEER_ACK)
+				|| state->peer_ack != tcp->th_ack)
 			flags |= TCPR_PEER_ACK;
 
 		state->peer_ack = tcp->th_ack;

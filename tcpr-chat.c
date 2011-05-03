@@ -219,7 +219,10 @@ static void *read_updates(void *arg)
 			message_now("Removed filter state.");
 			return NULL;
 		} else {
-			message("Unexpected update.");
+			fprintf(stderr, "Peer has acknowledged %" PRIu32
+					" bytes.\n",
+					ntohl(update.tcpr.peer_ack)
+					- ntohl(state->tcpr.peer_ack));
 		}
 	}
 	if (size < 0) {
