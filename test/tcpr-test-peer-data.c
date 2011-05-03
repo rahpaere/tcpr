@@ -13,7 +13,8 @@ int main(int argc, char **argv)
 	setup_test("tcpr-test", "test-peer-data");
 
 	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 0xdeadbeef,
-				0xcafebabe, 0, NULL, 0, 0);
+				0xcafebabe, test_options_size, test_options,
+				peer_mss, peer_ws);
 
 	fprintf(stderr, "       Peer: \"bar\"\n");
 	send_segment(external_log, net | 2, net | 3, 8888, 9999, TH_ACK,

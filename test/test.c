@@ -1,4 +1,5 @@
 #include "test.h"
+#include "../md5util.h"
 
 #include <fcntl.h>
 #include <inttypes.h>
@@ -193,6 +194,14 @@ void setup_test(const char *device, const char *log_name)
 	test_options[test_options_size++] = 3;
 	test_options[test_options_size++] = peer_ws;
 
+	test_options[test_options_size++] = 19;
+	test_options[test_options_size++] = 18;
+    test_options_size += 16;
+
+    /*test_options[test_options_size++] = 19;
+    test_options[test_options_size++] = 18;
+    test_options_size += 16;*/
+
 	if (test_options_size % 4) {
 		test_options[test_options_size++] = TCPOPT_EOL;
 		test_options_size += test_options_size % 4;
@@ -301,6 +310,8 @@ void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	struct ip *ip;
 	struct tcphdr *tcp;
 	size_t size = sizeof(*ip) + sizeof(*tcp) + options_size + payload_size;
+    uint8_t *option_ptr = options;
+    uint8_t digest[16];
 
 	ip = (struct ip *)packet;
 	ip->ip_v = 4;
@@ -327,6 +338,17 @@ void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	tcp->th_win = htons(65535);
 	tcp->th_sum = 0;
 	tcp->th_urp = 0;
+
+    while (option_ptr < options + options_size && *option_ptr != TCPOPT_EOL)
+        switch (*option_ptr) {
+        case 19:
+            compute_md5_checksum(ip, tcp, digest);
+            memcpy(option_ptr+2, digest, 16);
+        default:
+            option_ptr += option_ptr[1];
+            break;
+        }
+
 	memcpy(tcp + 1, options, options_size);
 	memcpy((uint8_t *)(tcp + 1) + options_size, payload, payload_size);
 	compute_tcp_checksum(ip, tcp);
@@ -348,6 +370,9 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	struct ip *ip;
 	struct tcphdr *tcp;
 	ssize_t size;
+    uint8_t *option_ptr = options;
+    uint8_t digest[16];
+    int i;
 
 	if ((size = read(tun, packet, sizeof(packet))) < 0) {
 		perror("Reading packet");
@@ -377,6 +402,16 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	expect(ntohl(tcp->th_ack), ack, "TCP acknowledgment");
 	expect(ntohs(tcp->th_sport), sport, "TCP source");
 	expect(ntohs(tcp->th_dport), dport, "TCP destination");
+
+    while (option_ptr < options + options_size && *option_ptr != TCPOPT_EOL)
+        switch (*option_ptr) {
+        case 19:
+            compute_md5_checksum(ip, tcp, digest);
+            memcpy(option_ptr+2, digest, 16);
+        default:
+            option_ptr += option_ptr[1];
+            break;
+        }
 
 	if (options_size && memcmp(tcp + 1, options, options_size)) {
 		fprintf(stderr, "TCP options do not match.\n");

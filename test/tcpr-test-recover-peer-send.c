@@ -13,11 +13,13 @@ int main(int argc, char **argv)
 	setup_test("tcpr-test", "test-recover-peer-send");
 
 	setup_connection(net | 2, net | 4, net | 3, 8888, 9999, 0xdeadbeef,
-				0xcafebabe, 0, NULL, 0, 0);
+				0xcafebabe, test_options_size, test_options,
+				peer_mss, peer_ws);
 
 	recover_connection(net | 5, net | 2, net | 3, 9999, 8888, 0xfeedbead,
-				0xcafebabe, 0xdeadbeef, 0, NULL, 0, 0,
-				TCPR_HAVE_ACK);
+				0xcafebabe, 0xdeadbeef, test_options_size, test_options,
+				peer_mss, peer_ws, TCPR_HAVE_ACK | TCPR_HAVE_PEER_MSS
+				| TCPR_HAVE_PEER_WS);
 
 	fprintf(stderr, "       Peer: \"baz\" (retransmit)\n");
 	send_segment(external_log, net | 2, net | 3, 8888, 9999, TH_ACK,

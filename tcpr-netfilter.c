@@ -1,4 +1,5 @@
 #include "tcpr.h"
+#include "md5util.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -289,9 +290,27 @@ static void drop(struct nfq_q_handle *q, int id)
 static void deliver(struct nfq_q_handle *q, int id, struct ip *ip,
 			struct tcphdr *tcp, FILE *log)
 {
+	uint8_t digest[16];
+	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
+	uint8_t *option = (uint8_t *)(tcp + 1);
+
 	++delivered;
-	if (!tcp->th_sum)
+    // Rewrite MD5 checksum if the option exists
+    while (option < end && *option != TCPOPT_EOL){
+        switch (*option) {
+        case 19:
+            compute_md5_checksum(ip, tcp, digest);
+            memcpy(option+2, digest, 16);
+            tcp->th_sum = 0;
+        default:
+            option += option[1];
+            break;
+        }
+    }
+
+    if (!tcp->th_sum)
 		compute_tcp_checksum(ip, tcp);
+
 	if (debugging)
 		log_packet(ip, log);
 	if (nfq_set_verdict(q, id, NF_ACCEPT, ntohs(ip->ip_len),
@@ -344,11 +363,33 @@ static void inject_acknowledgment(struct state *state)
 
 static void inject_handshake(struct state *state)
 {
-	struct segment s;
+	struct segment s = {0};
+	uint8_t digest[16];
+	uint8_t *end;
+	uint8_t *option;
+
 	tcpr_make_handshake(&s.tcp, &state->tcpr);
 	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
 			state->peer_address, internal_address, IPPROTO_TCP);
 	compute_ip_checksum(&s.ip);
+
+    // Set MD5 checksum if it's in the state
+	end = (uint8_t *)((uint32_t *)&s.tcp + s.tcp.th_off);
+	option = (uint8_t *)(&s.tcp + 1);
+    if (state->tcpr.flags & TCPR_HAVE_MD5) {
+        while (option < end && *option != TCPOPT_EOL){
+            switch (*option) {
+            case 19:
+                compute_md5_checksum(&s.ip, &s.tcp, digest);
+                memcpy(option+2, digest, 16);
+                s.tcp.th_sum = 0;
+            default:
+                option += option[1];
+                break;
+            }
+        }
+    }
+
 	compute_tcp_checksum(&s.ip, &s.tcp);
 	inject(&s.ip, internal_log);
 }
