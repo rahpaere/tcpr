@@ -363,11 +363,12 @@ static void inject_acknowledgment(struct state *state)
 
 static void inject_handshake(struct state *state)
 {
-	struct segment s = {0};
+	struct segment s;
 	uint8_t digest[16];
 	uint8_t *end;
 	uint8_t *option;
 
+	memset(&s, 0, sizeof(s));
 	tcpr_make_handshake(&s.tcp, &state->tcpr);
 	make_packet(&s.ip, sizeof(s.ip) + s.tcp.th_off * 4,
 			state->peer_address, internal_address, IPPROTO_TCP);
