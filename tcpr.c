@@ -35,7 +35,7 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 			state->flags |= TCPR_HAVE_PEER_WS;
 			option += option[1];
 			break;
-        case 19:
+        case TCPOPT_MD5:
             state->flags |= TCPR_HAVE_MD5;
             option += option[1];
             break;
@@ -107,7 +107,7 @@ int tcpr_handle_segment(struct tcpr_state *state, struct tcphdr *tcp,
 			break;
 		case TCPOPT_MAXSEG:
 		case TCPOPT_WINDOW:
-        case 19:
+        case TCPOPT_MD5:
             state->flags |= TCPR_HAVE_MD5;
             option += option[1];
             break;
@@ -217,7 +217,7 @@ void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
 	}
 
 	if (state->flags & TCPR_HAVE_MD5) {
-		option[i++] = 19;
+		option[i++] = TCPOPT_MD5;
 		option[i++] = 18;
         i += 16;
 	}

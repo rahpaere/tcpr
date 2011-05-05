@@ -194,19 +194,16 @@ void setup_test(const char *device, const char *log_name)
 	test_options[test_options_size++] = 3;
 	test_options[test_options_size++] = peer_ws;
 
-	test_options[test_options_size++] = 19;
+	test_options[test_options_size++] = TCPOPT_MD5;
 	test_options[test_options_size++] = 18;
     test_options_size += 16;
-
-    /*test_options[test_options_size++] = 19;
-    test_options[test_options_size++] = 18;
-    test_options_size += 16;*/
 
 	if (test_options_size % 4) {
 		test_options[test_options_size++] = TCPOPT_EOL;
 		test_options_size += test_options_size % 4;
 	}
 
+	load_passwords(PASSWORD_FILE);
 	setup_update_connection();
 }
 
@@ -234,7 +231,7 @@ void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 			uint16_t sport, uint16_t dport, 
 			uint32_t start_seq, uint32_t start_ack,
 			size_t options_size, const uint8_t *options,
-			uint16_t peer_mss, uint8_t peer_ws)
+			uint16_t peer_mss, uint8_t peer_ws, char *password)
 {
 	uint32_t option_flags = 0;
 	if (peer_mss)
@@ -244,21 +241,21 @@ void setup_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 
 	fprintf(stderr, "       Peer: SYN\n");
 	send_segment(external_log, saddr, faddr, sport, dport, TH_SYN,
-			start_seq, 0, options_size, options, 0, NULL);
+			start_seq, 0, options_size, options, 0, NULL, password);
 	recv_segment(internal_log, saddr, daddr, sport, dport, TH_SYN,
-			start_seq, 0, options_size, options, 0, NULL);
+			start_seq, 0, options_size, options, 0, NULL, password);
 
 	fprintf(stderr, "Application: SYN ACK\n");
 	send_segment(internal_log, daddr, saddr, dport, sport, TH_SYN | TH_ACK,
-			start_ack, start_seq + 1, 0, NULL, 0, NULL);
+			start_ack, start_seq + 1, 0, NULL, 0, NULL, password);
 	recv_segment(external_log, faddr, saddr, dport, sport, TH_SYN | TH_ACK,
-			start_ack, start_seq + 1, 0, NULL, 0, NULL);
+			start_ack, start_seq + 1, 0, NULL, 0, NULL, password);
 
 	fprintf(stderr, "       Peer: ACK\n");
 	send_segment(external_log, saddr, faddr, sport, dport, TH_ACK,
-			start_seq + 1, start_ack + 1, 0, NULL, 0, NULL);
+			start_seq + 1, start_ack + 1, 0, NULL, 0, NULL, password);
 	recv_segment(internal_log, saddr, daddr, sport, dport, TH_ACK,
-			start_seq + 1, start_ack + 1, 0, NULL, 0, NULL);
+			start_seq + 1, start_ack + 1, 0, NULL, 0, NULL, password);
 
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(saddr, daddr, sport, dport, start_ack + 1, start_seq + 1,
@@ -269,15 +266,15 @@ void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 			uint16_t sport, uint16_t dport, 
 			uint32_t new_seq, uint32_t seq, uint32_t ack,
 			size_t options_size, const uint8_t *options,
-			uint16_t peer_mss, uint8_t peer_ws, uint32_t flags)
+			uint16_t peer_mss, uint8_t peer_ws, uint32_t flags, char *password)
 {
 	fprintf(stderr, "Application: SYN (recovery)\n");
 	send_segment(internal_log, saddr, daddr, sport, dport, TH_SYN, new_seq,
-			0, options_size, options, 0, NULL);
+			0, options_size, options, 0, NULL, password);
 
 	fprintf(stderr, "     Filter: SYN ACK\n");
 	recv_segment(internal_log, daddr, saddr, dport, sport, TH_SYN | TH_ACK,
-			ack, new_seq + 1, options_size, options, 0, NULL);
+			ack, new_seq + 1, options_size, options, 0, NULL, password);
 
 	fprintf(stderr, "     Filter: update\n");
 	recv_update(daddr, saddr, dport, sport, seq + 1, ack + 1, peer_mss,
@@ -285,9 +282,9 @@ void recover_connection(uint32_t saddr, uint32_t daddr, uint32_t faddr,
 
 	fprintf(stderr, "Application: ACK\n");
 	send_segment(internal_log, saddr, daddr, sport, dport, TH_ACK,
-			new_seq + 1, ack + 1, 0, NULL, 0, NULL);
+			new_seq + 1, ack + 1, 0, NULL, 0, NULL, password);
 	recv_segment(external_log, faddr, daddr, sport, dport, TH_ACK, seq + 1,
-			ack + 1, 0, NULL, 0, NULL);
+			ack + 1, 0, NULL, 0, NULL, password);
 }
 
 void cleanup_connection(uint32_t peer_address, uint32_t address,
@@ -304,7 +301,8 @@ void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 			uint16_t sport, uint16_t dport, uint8_t flags,
 			uint32_t seq, uint32_t ack,
 			size_t options_size, const uint8_t *options,
-			size_t payload_size, const char *payload)
+			size_t payload_size, const char *payload,
+			char *password)
 {
 	uint8_t packet[SNAPLEN];
 	struct ip *ip;
@@ -341,8 +339,8 @@ void send_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 
     while (option_ptr < options + options_size && *option_ptr != TCPOPT_EOL)
         switch (*option_ptr) {
-        case 19:
-            compute_md5_checksum(ip, tcp, digest);
+        case TCPOPT_MD5:
+            compute_md5_checksum(ip, tcp, password, digest);
             memcpy(option_ptr+2, digest, 16);
         default:
             option_ptr += option_ptr[1];
@@ -364,7 +362,8 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 			uint16_t sport, uint16_t dport, uint8_t flags,
 			uint32_t seq, uint32_t ack,
 			size_t options_size, const uint8_t *options,
-			size_t payload_size, const char *payload)
+			size_t payload_size, const char *payload, 
+			char* password)
 {
 	uint8_t packet[SNAPLEN];
 	struct ip *ip;
@@ -372,7 +371,6 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 	ssize_t size;
     uint8_t *option_ptr = options;
     uint8_t digest[16];
-    int i;
 
 	if ((size = read(tun, packet, sizeof(packet))) < 0) {
 		perror("Reading packet");
@@ -405,8 +403,8 @@ void recv_segment(FILE *log, uint32_t saddr, uint32_t daddr,
 
     while (option_ptr < options + options_size && *option_ptr != TCPOPT_EOL)
         switch (*option_ptr) {
-        case 19:
-            compute_md5_checksum(ip, tcp, digest);
+        case TCPOPT_MD5:
+            compute_md5_checksum(ip, tcp, password, digest);
             memcpy(option_ptr+2, digest, 16);
         default:
             option_ptr += option_ptr[1];

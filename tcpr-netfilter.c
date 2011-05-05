@@ -293,13 +293,16 @@ static void deliver(struct nfq_q_handle *q, int id, struct ip *ip,
 	uint8_t digest[16];
 	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
 	uint8_t *option = (uint8_t *)(tcp + 1);
+	char *password;
 
 	++delivered;
     // Rewrite MD5 checksum if the option exists
     while (option < end && *option != TCPOPT_EOL){
         switch (*option) {
-        case 19:
-            compute_md5_checksum(ip, tcp, digest);
+        case TCPOPT_MD5:
+			password = get_password(ip->ip_src.s_addr, ntohs(tcp->th_sport), 
+									external_address, ntohs(tcp->th_dport));
+			compute_md5_checksum(ip, tcp, password, digest);
             memcpy(option+2, digest, 16);
             tcp->th_sum = 0;
         default:
@@ -367,6 +370,7 @@ static void inject_handshake(struct state *state)
 	uint8_t digest[16];
 	uint8_t *end;
 	uint8_t *option;
+	char *password;
 
 	memset(&s, 0, sizeof(s));
 	tcpr_make_handshake(&s.tcp, &state->tcpr);
@@ -380,8 +384,10 @@ static void inject_handshake(struct state *state)
     if (state->tcpr.flags & TCPR_HAVE_MD5) {
         while (option < end && *option != TCPOPT_EOL){
             switch (*option) {
-            case 19:
-                compute_md5_checksum(&s.ip, &s.tcp, digest);
+            case TCPOPT_MD5:
+				password = get_password(s.ip.ip_src.s_addr, ntohs(s.tcp.th_sport), 
+										external_address, ntohs(s.tcp.th_dport));
+                compute_md5_checksum(&s.ip, &s.tcp, password, digest);
                 memcpy(option+2, digest, 16);
                 s.tcp.th_sum = 0;
             default:
@@ -690,6 +696,8 @@ int main(int argc, char **argv)
 	struct sigaction old;
 	struct pollfd fds[2];
 	struct update update;
+
+	load_passwords(PASSWORD_FILE);
 
 	while ((ret = getopt(argc, argv, "i:e:a:f:q:s:dp?")) != -1)
 		switch (ret) {

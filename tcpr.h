@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <netinet/tcp.h>
 
+
 enum tcpr_flags {
 	TCPR_HAVE_PEER_FIN = 0x1,
 	TCPR_HAVE_PEER_ACK = 0x2,
@@ -29,6 +30,10 @@ enum tcpr_result {
 	TCPR_DUPLICATE_ACK = 0x40,
 	TCPR_UPDATE_ACK = 0x80,
 	TCPR_CLOSING = 0x100,
+};
+
+enum tcpopt_kind {
+	TCPOPT_MD5 = 19,
 };
 
 struct tcpr_state {
