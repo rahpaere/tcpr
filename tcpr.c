@@ -18,6 +18,7 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
 	uint8_t *end = (uint8_t *)((uint32_t *)tcp + tcp->th_off);
 	uint8_t *option = (uint8_t *)(tcp + 1);
 	uint8_t *tmp;
+	uint32_t *sack_ptr;
 	int flags = 0;
 
 	while (option < end && *option != TCPOPT_EOL)
@@ -39,6 +40,16 @@ int tcpr_handle_segment_from_peer(struct tcpr_state *state, struct tcphdr *tcp,
             state->flags |= TCPR_HAVE_MD5;
             option += option[1];
             break;
+		case TCPOPT_SACK_PERMITTED:
+			state->flags |= TCPR_HAVE_PEER_SACK_PERMITTED;
+			option += option[1];
+			break;
+		case TCPOPT_SACK:
+			for (sack_ptr = (uint32_t *) option + 2; 
+					sack_ptr < (uint32_t *) option + option[1]; sack_ptr++)
+				*sack_ptr += state->delta;
+			option += option[1];
+			break;
 		case TCPOPT_TIMESTAMP:
 			option += option[1];
 			break;
@@ -107,13 +118,14 @@ int tcpr_handle_segment(struct tcpr_state *state, struct tcphdr *tcp,
 			break;
 		case TCPOPT_MAXSEG:
 		case TCPOPT_WINDOW:
+		case TCPOPT_SACK_PERMITTED:
+		case TCPOPT_TIMESTAMP:
+			option += option[1];
+			break;
         case TCPOPT_MD5:
             state->flags |= TCPR_HAVE_MD5;
             option += option[1];
             break;
-		case TCPOPT_TIMESTAMP:
-			option += option[1];
-			break;
 		default:
 			tcp->th_sum = 0;
 			for (tmp = option + option[1]; option != tmp; option++)
@@ -222,6 +234,11 @@ void tcpr_make_handshake(struct tcphdr *tcp, struct tcpr_state *state)
         i += 16;
 	}
 
+	if (state->flags & TCPR_HAVE_PEER_SACK_PERMITTED) {
+		option[i++] = TCPOPT_SACK_PERMITTED;
+		option[i++] = 2;
+	}
+
 	if (i % 4)
 		option[i++] = TCPOPT_EOL;
 	tcp->th_off += (i + 3) / 4;
@@ -285,4 +302,6 @@ void tcpr_make_update(struct tcpr_update *update, struct tcpr_state *state)
 		update->flags |= TCPR_HAVE_PEER_MSS;
 	if (state->flags & TCPR_HAVE_PEER_WS)
 		update->flags |= TCPR_HAVE_PEER_WS;
+	if (state->flags & TCPR_HAVE_PEER_SACK_PERMITTED)
+		update->flags |= TCPR_HAVE_PEER_SACK_PERMITTED;
 }
