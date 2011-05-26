@@ -13,8 +13,7 @@ struct tcpr_connection {
 	int control_socket;
 };
 
-int tcpr_setup_connection(struct tcpr_connection *c,
-			  struct sockaddr_in *peer_address, uint16_t port);
+int tcpr_setup_connection(struct tcpr_connection *c, int sock);
 void tcpr_teardown_connection(struct tcpr_connection *c);
 
 int tcpr_consume(struct tcpr_connection *c, size_t bytes);

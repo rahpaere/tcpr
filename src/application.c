@@ -25,16 +25,15 @@ static const char state_path_format[] =
 static const char control_path_format[] =
     "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".ctl";
 
-static struct tcpr *open_state(struct sockaddr_in *peer_address, uint16_t port)
+static struct tcpr *open_state(const char *peer_host, uint16_t peer_port,
+			       uint16_t port)
 {
-	char host[INET_ADDRSTRLEN];
-	char path[sizeof(state_path_format) + sizeof(host) + 10];
+	char path[sizeof(state_path_format) + strlen(peer_host) + 10];
 	int fd;
 	int saved_errno;
 	struct tcpr *t;
 
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	sprintf(path, state_path_format, host, ntohs(peer_address->sin_port),
+	sprintf(path, state_path_format, peer_host, ntohs(peer_port),
 		ntohs(port));
 
 	fd = open(path, O_RDWR, 0600);
@@ -55,23 +54,35 @@ static struct tcpr *open_state(struct sockaddr_in *peer_address, uint16_t port)
 }
 
 static void setup_control_address(struct sockaddr_un *control_address,
-				  struct sockaddr_in *peer_address,
+				  const char *peer_host, uint16_t peer_port,
 				  uint16_t port)
 {
-	char host[INET_ADDRSTRLEN];
-
 	memset(control_address, 0, sizeof(*control_address));
 	control_address->sun_family = AF_UNIX;
-
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	sprintf(control_address->sun_path, control_path_format, host,
-		ntohs(peer_address->sin_port), ntohs(port));
+	sprintf(control_address->sun_path, control_path_format, peer_host,
+		ntohs(peer_port), ntohs(port));
 }
 
-int tcpr_setup_connection(struct tcpr_connection *c,
-			  struct sockaddr_in *peer_address, uint16_t port)
+int tcpr_setup_connection(struct tcpr_connection *c, int sock)
 {
-	c->state = open_state(peer_address, port);
+	char peer_host[INET_ADDRSTRLEN];
+	socklen_t addrlen;
+	struct sockaddr_in address;
+	struct sockaddr_in peer_address;
+
+	addrlen = sizeof(address);
+	if (getsockname(sock, (struct sockaddr *)&address, &addrlen) < 0)
+		return -1;
+
+	addrlen = sizeof(peer_address);
+	if (getpeername(sock, (struct sockaddr *)&peer_address, &addrlen) < 0)
+		return -1;
+
+	inet_ntop(AF_INET, &peer_address.sin_addr, peer_host,
+		  sizeof(peer_host));
+
+	c->state =
+	    open_state(peer_host, peer_address.sin_port, address.sin_port);
 	if (!c->state)
 		return -1;
 
@@ -81,7 +92,8 @@ int tcpr_setup_connection(struct tcpr_connection *c,
 		return -1;
 	}
 
-	setup_control_address(&c->control_address, peer_address, port);
+	setup_control_address(&c->control_address, peer_host,
+			      peer_address.sin_port, address.sin_port);
 	return 0;
 }
 

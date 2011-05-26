@@ -1,4 +1,4 @@
-#include <tcpr/types.h>
+#include <tcpr/application.h>
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -19,9 +19,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-static const char state_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".state";
-static const char ctl_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".ctl";
-
 struct flow {
 	char buffer[512];
 	ssize_t read;
@@ -36,7 +33,6 @@ struct chat {
 	const char *bind_port;
 	const char *connect_host;
 	const char *connect_port;
-	int ctl_socket;
 	int epoll_fd;
 	int using_tcpr;
 	int max_events;
@@ -44,8 +40,7 @@ struct chat {
 	struct flow flow_to_user;
 	struct sockaddr_in address;
 	struct sockaddr_in peer_address;
-	struct sockaddr_un ctl_address;
-	struct tcpr *state;
+	struct tcpr_connection tcpr;
 };
 
 static void print_help_and_exit(const char *program)
@@ -211,87 +206,14 @@ static void setup_connection(struct chat *c)
 	c->flow_to_peer.is_open = 1;
 }
 
-static struct tcpr *get_state(struct sockaddr_in *peer_address, uint16_t port, int create)
-{
-	char host[INET_ADDRSTRLEN];
-	char path[sizeof(state_path_format) + sizeof(host) + 10];
-	int flags;
-	int fd;
-	struct tcpr *state;
-
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	sprintf(path, state_path_format, host, ntohs(peer_address->sin_port), ntohs(port));
-
-	flags = O_RDWR;
-	if (create)
-		flags |= O_CREAT;
-	fd = open(path, flags, 0600);
-	if (fd < 0) {
-		perror("Opening state file");
-		return NULL;
-	}
-	if (ftruncate(fd, sizeof(*state)) < 0) {
-		perror("Resizing state file");
-		close(fd);
-		return NULL;
-	}
-
-	flags = PROT_READ | PROT_WRITE;
-	state = mmap(NULL, sizeof(*state), flags, MAP_SHARED, fd, 0);
-	if (state == MAP_FAILED) {
-		perror("Mapping state file");
-		close(fd);
-		return NULL;
-	}
-
-	close(fd);
-	return state;
-}
-
-static void teardown_state(struct tcpr *state)
-{
-	munmap(state, sizeof(*state));
-}
-
-static void setup_ctl_address(struct sockaddr_un *ctl_address, struct sockaddr_in *peer_address, uint16_t port)
-{
-	char host[INET_ADDRSTRLEN];
-
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	memset(ctl_address, 0, sizeof(*ctl_address));
-	ctl_address->sun_family = AF_UNIX;
-	sprintf(ctl_address->sun_path, ctl_path_format, host, ntohs(peer_address->sin_port), ntohs(port));
-}
-
-static int get_ctl(void)
-{
-	return socket(AF_UNIX, SOCK_DGRAM, 0);
-}
-
-static void teardown_ctl(int s)
-{
-	close(s);
-}
-
 static void setup_tcpr(struct chat *c)
 {
 	if (!c->using_tcpr)
 		return;
-
-	c->state = get_state(&c->peer_address, c->address.sin_port, 0);
-	if (!c->state) {
-		fprintf(stderr, "Could not get TCPR state.\n");
+	if (tcpr_setup_connection(&c->tcpr, c->flow_to_peer.dst) < 0) {
+		perror("Error setting up TCPR");
 		exit(EXIT_FAILURE);
 	}
-
-	c->ctl_socket = get_ctl();
-	if (c->ctl_socket < 0) {
-		fprintf(stderr, "Could not get control socket.\n");
-		exit(EXIT_FAILURE);
-	}
-
-	setup_ctl_address(&c->ctl_address, &c->peer_address,
-			  c->address.sin_port);
 }
 
 static void setup_events(struct chat *c)
@@ -329,43 +251,16 @@ static void setup_events(struct chat *c)
 	}
 }
 
-static void update_tcpr(struct chat *c)
-{
-	if (sendto(c->ctl_socket, "1\n", 2, 0, (struct sockaddr *)&c->ctl_address, sizeof(c->ctl_address)) < 0)
-		perror("Error updating TCPR");
-}
-
-static void notify_tcpr_data(struct chat *c, size_t bytes)
-{
-	if (!c->using_tcpr)
-		return;
-	c->state->saved.ack = htonl(ntohl(c->state->saved.ack) + bytes);
-	update_tcpr(c);
-}
-
-static void notify_tcpr_done_reading(struct chat *c)
-{
-	if (!c->using_tcpr)
-		return;
-	c->state->saved.done_reading = 1;
-	update_tcpr(c);
-}
-
-static void notify_tcpr_done_writing(struct chat *c)
-{
-	if (!c->using_tcpr)
-		return;
-	c->state->saved.done_writing = 1;
-}
-
 static void handle_close(struct flow *f, struct chat *c, struct epoll_event *e)
 {
 	f->is_open = 0;
 	if (f == &c->flow_to_peer) {
-		notify_tcpr_done_writing(c);
+		if (c->using_tcpr)
+			tcpr_done_writing(&c->tcpr);
 		shutdown(f->dst, SHUT_WR);
 	} else {
-		notify_tcpr_done_reading(c);
+		if (c->using_tcpr)
+			tcpr_done_reading(&c->tcpr);
 		shutdown(f->src, SHUT_RD);
 	}
 	e->events = 0;
@@ -391,8 +286,8 @@ static void handle_input(struct flow *f, struct chat *c, struct epoll_event *e)
 		return;
 	}
 
-	if (f == &c->flow_to_user)
-		notify_tcpr_data(c, f->read);
+	if (f == &c->flow_to_user && c->using_tcpr)
+		tcpr_consume(&c->tcpr, f->read);
 	e->events = 0;
 	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->src, e) < 0) {
 		perror("Error disabling input event");
@@ -460,8 +355,7 @@ static void teardown_tcpr(struct chat *c)
 {
 	if (!c->using_tcpr)
 		return;
-	teardown_state(c->state);
-	teardown_ctl(c->ctl_socket);
+	tcpr_teardown_connection(&c->tcpr);
 }
 
 static void teardown_connection(struct chat *c)

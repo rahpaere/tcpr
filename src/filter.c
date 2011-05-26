@@ -275,7 +275,8 @@ static void reset(struct connection *c, struct filter *f)
 	} packet;
 	tcpr_reset(&packet.tcp, c->state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
-	log_packet(f->internal_log, &packet.ip);
+	if (f->debugging)
+		log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
 
@@ -287,7 +288,8 @@ static void recover(struct connection *c, struct filter *f)
 	} packet;
 	tcpr_recover(&packet.tcp, c->state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
-	log_packet(f->internal_log, &packet.ip);
+	if (f->debugging)
+		log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
 
@@ -299,7 +301,8 @@ static void update(struct connection *c, struct filter *f)
 	} packet;
 	tcpr_update(&packet.tcp, c->state);
 	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr, c->port, c->peer_address.sin_port);
-	log_packet(f->external_log, &packet.ip);
+	if (f->debugging)
+		log_packet(f->external_log, &packet.ip);
 	inject(&packet.ip, f);
 }
 
@@ -501,17 +504,21 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	}
 
 	if (is_from_peer(ip, f)) {
-		log_packet(f->external_log, ip);
+		if (f->debugging)
+			log_packet(f->external_log, ip);
 		tcpr_filter_peer(c->state, tcp, tcp_size);
 		internalize_destination(ip, tcp, f);
-		log_packet(f->internal_log, ip);
+		if (f->debugging)
+			log_packet(f->internal_log, ip);
 		deliver(id, ip, tcp, f);
 	} else {
-		log_packet(f->internal_log, ip);
+		if (f->debugging)
+			log_packet(f->internal_log, ip);
 		switch (tcpr_filter(c->state, tcp, tcp_size)) {
 		case TCPR_DELIVER:
 			externalize_source(ip, tcp, f);
-			log_packet(f->external_log, ip);
+			if (f->debugging)
+				log_packet(f->external_log, ip);
 			deliver(id, ip, tcp, f);
 			break;
 		case TCPR_DROP:

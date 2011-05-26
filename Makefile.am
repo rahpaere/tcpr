@@ -2,11 +2,14 @@ EXTRA_DIST = LICENSE netperf-2.4.5-tcpr.patch
 AM_CFLAGS = -D_BSD_SOURCE -Wall -Wextra -I$(srcdir)/include
 
 tcpr_includedir=$(includedir)/tcpr
-tcpr_include_HEADERS = include/tcpr/types.h include/tcpr/filter.h
+tcpr_include_HEADERS = \
+	include/tcpr/application.h \
+	include/tcpr/filter.h \
+	include/tcpr/types.h
 
 bin_PROGRAMS = tcpr-chat tcpr-filter
 
-tcpr_chat_SOURCES = src/chat.c
+tcpr_chat_SOURCES = src/chat.c src/application.c
 tcpr_filter_SOURCES = src/filter.c src/tcpr.c src/md5/md5.c src/md5util.c
 
 TESTS = test/tcpr-test-setup-teardown \
