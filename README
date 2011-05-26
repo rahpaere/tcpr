@@ -32,65 +32,66 @@ Once the dependencies are installed, build the project.
   $ cd tcpr-build
   $ ../tcpr/configure && make
 
-Two programs result: tcpr-netfilter, the packet filter, and tcpr-chat,
-the demonstration program.  In order to run, tcpr-netfilter requires
-some special privileges.
+Two programs result: tcpr-filter, the packet filter, and tcpr-chat,
+the demonstration program.  In order to run, tcpr-filter requires some
+special privileges.
 
-  # setcap cap_net_admin,cap_net_raw,cap_sys_nice+eip tcpr-netfilter
+  # setcap cap_net_admin,cap_net_raw,cap_sys_nice+eip tcpr-filter
 
-Whenever you rebuild tcpr-netfilter, the overwitten file will lose its
+Whenever you rebuild tcpr-filter, the overwitten file will lose its
 capabilities and you will need to set them again.  However, you will be
 able to run the filter as an unprivileged user.
 
 
 The tcpr-chat program can perform as either client or server, and
 orthogonally as either fault-tolerant application or legacy peer.
-For a working example, assume you will conduct a demonstration over the
-loopback device on a single machine.  The legacy peer endpoint will be
-the standard loopback address, 127.0.0.1.  The filter will rewrite an
-internal address for the fault-tolerant application into an externally
-visible one for the peer; those addresses must be distinct, and it is
-easiest if they are also different from the peer's address, so give your
-loopback device two more arbitrary addresses.
+For a working example, assume you will conduct a demonstration using
+the loopback address on a single machine.  The application must bind
+to a distinct internal address, which the filter will rewrite into an
+externally visible one for the peer, so give your loopback device another
+arbitrary address to use internally.
 
   # ip addr add dev lo 127.0.0.2/32
-  # ip addr add dev lo 127.0.0.3/32
 
 To double check, list the current addresses.
 
   $ ip addr
 
-Now it is necessary to configure the Linux builtin firewall, Netfilter, to
-capture the appropriate packets and send them to userspace for the filter.
+Now it is necessary to configure the Linux builtin firewall, Netfilter,
+to capture the appropriate packets and send them to userspace for the
+filter.  Restrict the captured packets by port to avoid disturbing your
+other traffic.
 
-  # iptables -A OUTPUT -s 127.0.0.3 -j NFQUEUE
-  # iptables -A INPUT -d 127.0.0.2 -j NFQUEUE
+  # iptables -A OUTPUT -s 127.0.0.2 -j NFQUEUE
+  # iptables -A INPUT -d 127.0.0.1 -p tcp --dport 8888 -j NFQUEUE
 
 To double check, list the current rules.
 
   # iptables -nL
 
-Now run the filter.  It needs to know the internal address of the
-application and the external address to map it to.
+Now run the filter.  The default internal and external addresses are
+configured for the demonstration, so no arguments are necessary.
 
-  $ tcpr-netfilter -i 127.0.0.3 -e 127.0.0.2
+  $ tcpr-filter
 
-In its own terminal, run the application as a server, bound to its
-internal address.
+In its own terminal, run the application as a server.
 
-  $ tcpr-chat -b 127.0.0.3
+  $ tcpr-chat
 
-In yet another terminal, run the peer as a client, connecting to the
-external address.
+In yet another terminal, run the peer as a client.
 
-  $ tcpr-chat -p -b 127.0.0.1 -c 127.0.0.2
+  $ tcpr-chat -p
 
 Now chat back and forth between the two endpoints.  You can kill the
-fault-tolerant application with control-C and recover it by running
-the same command-line again; you can also kill and recover the filter
-in the same way, or even kill both and recover them simultaneously.
-When you are finished at either endpoint, type control-D.  When both
-ends have finished, they will exit.  Finally, kill the filter.
+fault-tolerant application with control-C.  You can then recover by
+invoking it with options to connect back to the peer.
+
+  $ tcpr-chat -c 127.0.0.1:9999
+
+You can also kill and recover the filter in the same way, or even kill
+both and recover them simultaneously.  When you are finished at either
+endpoint, type control-D.  When both ends have finished, they will exit.
+Finally, kill the filter.
 
 To get a closer look at what is happening, or to debug a problem, you
 can run the filter with the `-d' option, which causes it to dump packet
@@ -103,18 +104,20 @@ to set up another terminal to watch the state various connections are in.
 To clean up, remove the addresses and filter rules you added.
 
   # ip addr del dev lo 127.0.0.2/32
-  # ip addr del dev lo 127.0.0.3/32
 
-  # iptables -D OUTPUT -s 127.0.0.3 -j NFQUEUE
-  # iptables -D INPUT -d 127.0.0.2 -j NFQUEUE
+  # iptables -D OUTPUT -s 127.0.0.2 -j NFQUEUE
+  # iptables -D INPUT -d 127.0.0.1 -p tcp --dport 8888 -j NFQUEUE
 
-Sometimes, if the application crashes but you move on to
-something else and never recover it, you will find its state file,
-tcpr-application.state, lying about.  That can cause tcpr-chat to attempt
-to recover an old connection when you meant to establish a new one;
-if that happens to you, simply delete the state file and start over.
+If the application crashes but you move on to something else without
+recovering and closing gracefully, its state will lie about and confuse
+the application into recovering the next time you mean to reestablish
+the connection fresh.  Find the relevant files in /var/tmp and delete
+and then start over.
 
-To write new applications, look through `tcpr-chat.c' in detail.  It is
+  $ rm -f /var/tmp/tcpr-127.0.0.1-9999-8888.state
+  $ rm -f /var/tmp/tcpr-127.0.0.1-9999-8888.ctl
+
+To write new applications, look through `src/chat.c' in detail.  It is
 useful not only for demonstrating the system to others, but also for
 demonstrating by example how to write a TCPR-aware application.
 
@@ -142,7 +145,7 @@ the inefficient routing being simulated.
 
 Now run the filter.
 
-  $ tcpr-netfilter -i 10.10.10.4 -e 10.10.10.3
+  $ tcpr-filter -i 10.10.10.4 -e 10.10.10.3
 
 In another terminal, build and run the tests:
 
@@ -168,14 +171,14 @@ demonstration.  On the peer machine, launch the server side.
 
 On the application machine, launch the filter.
 
-  # tcpr-netfilter -i 127.0.0.3 -e 127.0.0.2
+  # tcpr-filter
 
 In another terminal on the application machine, launch the application,
 that is, the netperf test.  It will communicate with the peer directly
 to establish a control connection, then switch to using its internal
 address for the data connection in order to flow through the filter.
 
-  $ netperf -H 127.0.0.1 -t TCP_STREAM -- -L 127.0.0.3
+  $ netperf -H 127.0.0.1 -t TCP_STREAM -- -L 127.0.0.2
 
 The TCP_STREAM test measures throughput with the application sending
 data to the peer.  To measure throughput in the reverse direction,
@@ -190,8 +193,8 @@ the `-c' option at the end.  To additionally stop sending updates, provide
 the `-u' option as well.  To fall back on the original, TCPR-oblivious
 behavior, just pass the `-T' option at the end.  In the last case,
 either test a connection that bypasses the filter (to test raw TCP),
-or send it through the filter but pass `-p' to tcpr-netfilter so that
-it passes packets through unchanged.
+or send it through the filter but pass `-p' to tcpr-filter so that it
+passes packets through unchanged.
 
 If you crash netperf or abort in the middle and notice (perhaps with
 `netstat') that old connections are sitting around, kill netperf and the
