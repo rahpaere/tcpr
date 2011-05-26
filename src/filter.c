@@ -465,6 +465,13 @@ static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
 		return NULL;
 	}
 
+	if (!tsearch(c, (void **)&f->connections, compare_connections)) {
+		teardown_state(c->state);
+		teardown_ctl(c->ctl_socket);
+		free(c);
+		return NULL;
+	}
+
 	return c;
 }
 

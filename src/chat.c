@@ -22,6 +22,15 @@
 static const char state_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".state";
 static const char ctl_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".ctl";
 
+struct flow {
+	char buffer[512];
+	ssize_t read;
+	ssize_t written;
+	int src;
+	int dst;
+	int is_open;
+};
+
 struct chat {
 	const char *bind_host;
 	const char *bind_port;
@@ -29,9 +38,10 @@ struct chat {
 	const char *connect_port;
 	int ctl_socket;
 	int epoll_fd;
-	int peer_socket;
 	int using_tcpr;
 	int max_events;
+	struct flow flow_to_peer;
+	struct flow flow_to_user;
 	struct sockaddr_in address;
 	struct sockaddr_in peer_address;
 	struct sockaddr_un ctl_address;
@@ -169,10 +179,11 @@ static void setup_connection(struct chat *c)
 		}
 
 		freeaddrinfo(ai);
-		c->peer_socket = s;
 
 		addrlen = sizeof(c->peer_address);
-		getpeername(c->peer_socket, (struct sockaddr *)&c->address, &addrlen);
+		getpeername(s, (struct sockaddr *)&c->address, &addrlen);
+
+		c->flow_to_peer.dst = s;
 	} else {
 		if (listen(s, 1) < 0) {
 			perror("Listening");
@@ -180,8 +191,8 @@ static void setup_connection(struct chat *c)
 		}
 
 		addrlen = sizeof(c->peer_address);
-		c->peer_socket = accept(s, (struct sockaddr *)&c->peer_address, &addrlen);
-		if (c->peer_socket < 0) {
+		c->flow_to_peer.dst = accept(s, (struct sockaddr *)&c->peer_address, &addrlen);;
+		if (c->flow_to_peer.dst < 0) {
 			perror("Accepting");
 			exit(EXIT_FAILURE);
 		}
@@ -190,7 +201,14 @@ static void setup_connection(struct chat *c)
 	}
 
 	addrlen = sizeof(c->address);
-	getsockname(c->peer_socket, (struct sockaddr *)&c->address, &addrlen);
+	getsockname(c->flow_to_peer.dst, (struct sockaddr *)&c->address, &addrlen);
+
+	c->flow_to_user.src = dup(c->flow_to_peer.dst);
+	c->flow_to_user.dst = 1;
+	c->flow_to_user.is_open = 1;
+
+	c->flow_to_peer.src = 0;
+	c->flow_to_peer.is_open = 1;
 }
 
 static struct tcpr *get_state(struct sockaddr_in *peer_address, uint16_t port, int create)
@@ -278,23 +296,26 @@ static void setup_events(struct chat *c)
 	}
 
 	event.events = EPOLLIN;
-	event.data.fd = c->peer_socket;
-	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, c->peer_socket, &event) < 0) {
-		perror("Error adding peer socket to epoll");
+	event.data.ptr = &c->flow_to_peer;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, c->flow_to_peer.src, &event) < 0) {
+		perror("Error adding peer input to epoll");
 		exit(EXIT_FAILURE);
 	}
-
-	event.events = EPOLLIN;
-	event.data.fd = 0;
-	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, 0, &event) < 0) {
-		perror("Error adding standard input to epoll");
+	event.data.ptr = &c->flow_to_user;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, c->flow_to_user.src, &event) < 0) {
+		perror("Error adding user input to epoll");
 		exit(EXIT_FAILURE);
 	}
 
 	event.events = 0;
-	event.data.fd = 1;
-	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, 1, &event) < 0) {
-		perror("Error adding standard output to epoll");
+	event.data.ptr = &c->flow_to_peer;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, c->flow_to_peer.dst, &event) < 0) {
+		perror("Error adding peer output to epoll");
+		exit(EXIT_FAILURE);
+	}
+	event.data.ptr = &c->flow_to_user;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, c->flow_to_user.dst, &event) < 0) {
+		perror("Error adding user output to epoll");
 		exit(EXIT_FAILURE);
 	}
 }
@@ -328,127 +349,95 @@ static void notify_tcpr_done_writing(struct chat *c)
 	c->state->saved.done_writing = 1;
 }
 
+static void handle_close(struct flow *f, struct chat *c, struct epoll_event *e)
+{
+	f->is_open = 0;
+	if (f == &c->flow_to_peer) {
+		notify_tcpr_done_writing(c);
+		shutdown(f->dst, SHUT_WR);
+	} else {
+		notify_tcpr_done_reading(c);
+		shutdown(f->src, SHUT_RD);
+	}
+	e->events = 0;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->src, e) < 0) {
+		perror("Error disabling input event");
+		exit(EXIT_FAILURE);
+	}
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->dst, e) < 0) {
+		perror("Error disabling output event");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void handle_input(struct flow *f, struct chat *c, struct epoll_event *e)
+{
+	f->written = 0;
+	f->read = read(f->src, f->buffer, sizeof(f->buffer));
+	if (f->read < 0) {
+		perror("Reading input");
+		exit(EXIT_FAILURE);
+	} else if (f->read == 0) {
+		handle_close(f, c, e);
+		return;
+	}
+
+	if (f == &c->flow_to_user)
+		notify_tcpr_data(c, f->read);
+	e->events = 0;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->src, e) < 0) {
+		perror("Error disabling input event");
+		exit(EXIT_FAILURE);
+	}
+	e->events = EPOLLOUT;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->dst, e) < 0) {
+		perror("Error enabling output event");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void handle_output(struct flow *f, struct chat *c, struct epoll_event *e)
+{
+	ssize_t written;
+	written = write(f->dst, &f->buffer[f->written], f->read - f->written);
+	if (written < 0) {
+		perror("Writing output");
+		exit(EXIT_FAILURE);
+	}
+
+	f->written += written;
+	if (f->written == f->read) {
+		e->events = 0;
+		if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->dst, e) < 0) {
+			perror("Error disabling output event");
+			exit(EXIT_FAILURE);
+		}
+		e->events = EPOLLIN;
+		if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->src, e) < 0) {
+			perror("Error enabling input event");
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
 static void handle_events(struct chat *c)
 {
-	char data_from_peer[512];
-	char data_from_user[512];
 	int i;
 	int n;
-	ssize_t written;
-	ssize_t data_from_peer_size = 0;
-	ssize_t data_from_peer_written = 0;
-	ssize_t data_from_user_size = 0;
-	ssize_t data_from_user_written = 0;
-	struct epoll_event events[c->max_events];
-	int open_connections = 2;
+	struct epoll_event e[c->max_events];
 
-	while (open_connections) {
-		n = epoll_wait(c->epoll_fd, events, c->max_events, -1);
+	while (c->flow_to_peer.is_open || c->flow_to_user.is_open) {
+		n = epoll_wait(c->epoll_fd, e, c->max_events, -1);
 		if (n < 0) {
 			perror("Error waiting for events");
 			exit(EXIT_FAILURE);
 		}
 
 		for (i = 0; i < n; i++) {
-			if (events[i].data.fd == 0) {
-				data_from_user_written = 0;
-				data_from_user_size = read(0, data_from_user, sizeof(data_from_user));
-				if (data_from_user_size < 0) {
-					perror("Reading from user");
-					exit(EXIT_FAILURE);
-				} else if (data_from_user_size == 0) {
-					open_connections--;
-					notify_tcpr_done_writing(c);
-					shutdown(c->peer_socket, SHUT_WR);
-					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_DEL, 0, &events[i]) < 0) {
-						perror("Error deleting input from user events");
-						exit(EXIT_FAILURE);
-					}
-				} else {
-					events[i].events = 0;
-					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 0, &events[i]) < 0) {
-						perror("Error disabling input from user events");
-						exit(EXIT_FAILURE);
-					}
-					events[i].events = EPOLLOUT;
-					events[i].data.fd = c->peer_socket;
-					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
-						perror("Error enabling output to peer events");
-						exit(EXIT_FAILURE);
-					}
-				}
-			} else if (events[i].data.fd == 1) {
-				written = write(1, &data_from_peer[data_from_peer_written], data_from_peer_size - data_from_peer_written);
-				if (written < 0) {
-					perror("Writing to user");
-					exit(EXIT_FAILURE);
-				}
-				notify_tcpr_data(c, written);
-				data_from_peer_written += written;
-				if (data_from_peer_written == data_from_peer_size) {
-					events[i].events = 0;
-					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 1, &events[i]) < 0) {
-						perror("Error disabling output to user events");
-						exit(EXIT_FAILURE);
-					}
-					events[i].events = EPOLLIN;
-					events[i].data.fd = c->peer_socket;
-					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
-						perror("Error enabling input from peer events");
-						exit(EXIT_FAILURE);
-					}
-				}
-			} else {
-				if (events[i].events & EPOLLIN) {
-					data_from_peer_written = 0;
-					data_from_peer_size = read(c->peer_socket, data_from_peer, sizeof(data_from_peer));
-					if (data_from_peer_size < 0) {
-						perror("Reading from peer");
-						exit(EXIT_FAILURE);
-					} else if (data_from_peer_size == 0) {
-						open_connections--;
-						notify_tcpr_done_reading(c);
-						shutdown(c->peer_socket, SHUT_RD);
-						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_DEL, c->peer_socket, &events[i]) < 0) {
-							perror("Error deleting input from peer events");
-							exit(EXIT_FAILURE);
-						}
-					} else {
-						events[i].events = 0;
-						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
-							perror("Error disabling input from peer events");
-							exit(EXIT_FAILURE);
-						}
-						events[i].events = EPOLLOUT;
-						events[i].data.fd = 1;
-						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 1, &events[i]) < 0) {
-							perror("Error enabling output to user events");
-							exit(EXIT_FAILURE);
-						}
-					}
-				}
-				if (events[i].events & EPOLLOUT) {
-					written = write(c->peer_socket, &data_from_user[data_from_user_written], data_from_user_size - data_from_user_written);
-					if (written < 0) {
-						perror("Writing to peer");
-						exit(EXIT_FAILURE);
-					}
-					data_from_user_written += written;
-					if (data_from_user_written == data_from_user_size) {
-						events[i].events = 0;
-						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
-							perror("Error disabling output to peer events");
-							exit(EXIT_FAILURE);
-						}
-						events[i].events = EPOLLIN;
-						events[i].data.fd = 0;
-						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 0, &events[i]) < 0) {
-							perror("Error enabling input from user events");
-							exit(EXIT_FAILURE);
-						}
-					}
-				}
-			}
+			if (e[i].events & EPOLLIN)
+				handle_input(e[i].data.ptr, c, &e[i]);
+			else if (e[i].events & EPOLLOUT)
+				handle_output(e[i].data.ptr, c, &e[i]);
 		}
 	}
 }
@@ -468,7 +457,9 @@ static void teardown_tcpr(struct chat *c)
 
 static void teardown_connection(struct chat *c)
 {
-	if (close(c->peer_socket) < 0)
+	if (close(c->flow_to_peer.dst) < 0)
+		perror("Closing connection");
+	if (close(c->flow_to_user.src) < 0)
 		perror("Closing connection");
 }
 
