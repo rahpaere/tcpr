@@ -738,7 +738,6 @@ int main(int argc, char **argv)
 	setup_events(&f);
 	setup_raw_socket(&f);
 
-	/* FIXME: logging and statistics */
 	handle_events(&f);
 
 	teardown_raw_socket(&f);

@@ -31,6 +31,7 @@ struct chat {
 	int epoll_fd;
 	int peer_socket;
 	int using_tcpr;
+	int max_events;
 	struct sockaddr_in address;
 	struct sockaddr_in peer_address;
 	struct sockaddr_un ctl_address;
@@ -77,6 +78,7 @@ static void handle_options(struct chat *c, int argc, char **argv)
 	c->connect_host = NULL;
 	c->connect_port = NULL;
 	c->using_tcpr = 1;
+	c->max_events = 256;
 
 	while ((o = getopt(argc, argv, "b:c:p?")) != -1)
 		switch (o) {
@@ -267,13 +269,34 @@ static void setup_tcpr(struct chat *c)
 
 static void setup_events(struct chat *c)
 {
+	struct epoll_event event;
+
 	c->epoll_fd = epoll_create1(0);
 	if (c->epoll_fd < 0) {
 		perror("Error creating epoll handle");
 		exit(EXIT_FAILURE);
 	}
 
-	/* FIXME: set up events for peer and console */
+	event.events = EPOLLIN;
+	event.data.fd = c->peer_socket;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, c->peer_socket, &event) < 0) {
+		perror("Error adding peer socket to epoll");
+		exit(EXIT_FAILURE);
+	}
+
+	event.events = EPOLLIN;
+	event.data.fd = 0;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, 0, &event) < 0) {
+		perror("Error adding standard input to epoll");
+		exit(EXIT_FAILURE);
+	}
+
+	event.events = 0;
+	event.data.fd = 1;
+	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_ADD, 1, &event) < 0) {
+		perror("Error adding standard output to epoll");
+		exit(EXIT_FAILURE);
+	}
 }
 
 static void update_tcpr(struct chat *c)
@@ -282,25 +305,151 @@ static void update_tcpr(struct chat *c)
 		perror("Error updating TCPR");
 }
 
+static void notify_tcpr_data(struct chat *c, size_t bytes)
+{
+	if (!c->using_tcpr)
+		return;
+	c->state->saved.ack = htonl(ntohl(c->state->saved.ack) + bytes);
+	update_tcpr(c);
+}
+
 static void notify_tcpr_done_reading(struct chat *c)
 {
+	if (!c->using_tcpr)
+		return;
 	c->state->saved.done_reading = 1;
 	update_tcpr(c);
 }
 
 static void notify_tcpr_done_writing(struct chat *c)
 {
+	if (!c->using_tcpr)
+		return;
 	c->state->saved.done_writing = 1;
 }
 
 static void handle_events(struct chat *c)
 {
-	/* FIXME: ferry data */
+	char data_from_peer[512];
+	char data_from_user[512];
+	int i;
+	int n;
+	ssize_t written;
+	ssize_t data_from_peer_size = 0;
+	ssize_t data_from_peer_written = 0;
+	ssize_t data_from_user_size = 0;
+	ssize_t data_from_user_written = 0;
+	struct epoll_event events[c->max_events];
+	int open_connections = 2;
 
-	/* FIXME: debugging */
-	if (c->using_tcpr) {
-		notify_tcpr_done_writing(c);
-		notify_tcpr_done_reading(c);
+	while (open_connections) {
+		n = epoll_wait(c->epoll_fd, events, c->max_events, -1);
+		if (n < 0) {
+			perror("Error waiting for events");
+			exit(EXIT_FAILURE);
+		}
+
+		for (i = 0; i < n; i++) {
+			if (events[i].data.fd == 0) {
+				data_from_user_written = 0;
+				data_from_user_size = read(0, data_from_user, sizeof(data_from_user));
+				if (data_from_user_size < 0) {
+					perror("Reading from user");
+					exit(EXIT_FAILURE);
+				} else if (data_from_user_size == 0) {
+					open_connections--;
+					notify_tcpr_done_writing(c);
+					shutdown(c->peer_socket, SHUT_WR);
+					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_DEL, 0, &events[i]) < 0) {
+						perror("Error deleting input from user events");
+						exit(EXIT_FAILURE);
+					}
+				} else {
+					events[i].events = 0;
+					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 0, &events[i]) < 0) {
+						perror("Error disabling input from user events");
+						exit(EXIT_FAILURE);
+					}
+					events[i].events = EPOLLOUT;
+					events[i].data.fd = c->peer_socket;
+					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
+						perror("Error enabling output to peer events");
+						exit(EXIT_FAILURE);
+					}
+				}
+			} else if (events[i].data.fd == 1) {
+				written = write(1, &data_from_peer[data_from_peer_written], data_from_peer_size - data_from_peer_written);
+				if (written < 0) {
+					perror("Writing to user");
+					exit(EXIT_FAILURE);
+				}
+				notify_tcpr_data(c, written);
+				data_from_peer_written += written;
+				if (data_from_peer_written == data_from_peer_size) {
+					events[i].events = 0;
+					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 1, &events[i]) < 0) {
+						perror("Error disabling output to user events");
+						exit(EXIT_FAILURE);
+					}
+					events[i].events = EPOLLIN;
+					events[i].data.fd = c->peer_socket;
+					if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
+						perror("Error enabling input from peer events");
+						exit(EXIT_FAILURE);
+					}
+				}
+			} else {
+				if (events[i].events & EPOLLIN) {
+					data_from_peer_written = 0;
+					data_from_peer_size = read(c->peer_socket, data_from_peer, sizeof(data_from_peer));
+					if (data_from_peer_size < 0) {
+						perror("Reading from peer");
+						exit(EXIT_FAILURE);
+					} else if (data_from_peer_size == 0) {
+						open_connections--;
+						notify_tcpr_done_reading(c);
+						shutdown(c->peer_socket, SHUT_RD);
+						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_DEL, c->peer_socket, &events[i]) < 0) {
+							perror("Error deleting input from peer events");
+							exit(EXIT_FAILURE);
+						}
+					} else {
+						events[i].events = 0;
+						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
+							perror("Error disabling input from peer events");
+							exit(EXIT_FAILURE);
+						}
+						events[i].events = EPOLLOUT;
+						events[i].data.fd = 1;
+						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 1, &events[i]) < 0) {
+							perror("Error enabling output to user events");
+							exit(EXIT_FAILURE);
+						}
+					}
+				}
+				if (events[i].events & EPOLLOUT) {
+					written = write(c->peer_socket, &data_from_user[data_from_user_written], data_from_user_size - data_from_user_written);
+					if (written < 0) {
+						perror("Writing to peer");
+						exit(EXIT_FAILURE);
+					}
+					data_from_user_written += written;
+					if (data_from_user_written == data_from_user_size) {
+						events[i].events = 0;
+						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, c->peer_socket, &events[i]) < 0) {
+							perror("Error disabling output to peer events");
+							exit(EXIT_FAILURE);
+						}
+						events[i].events = EPOLLIN;
+						events[i].data.fd = 0;
+						if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, 0, &events[i]) < 0) {
+							perror("Error enabling input from user events");
+							exit(EXIT_FAILURE);
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
