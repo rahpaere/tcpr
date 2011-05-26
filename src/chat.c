@@ -290,7 +290,7 @@ static void notify_tcpr_done_reading(struct chat *c)
 
 static void notify_tcpr_done_writing(struct chat *c)
 {
-	c->state->saved.done_reading = 1;
+	c->state->saved.done_writing = 1;
 }
 
 static void handle_events(struct chat *c)
@@ -299,8 +299,8 @@ static void handle_events(struct chat *c)
 
 	/* FIXME: debugging */
 	if (c->using_tcpr) {
-		notify_tcpr_done_reading(c);
 		notify_tcpr_done_writing(c);
+		notify_tcpr_done_reading(c);
 	}
 }
 

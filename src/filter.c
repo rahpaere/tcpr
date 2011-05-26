@@ -247,7 +247,7 @@ static void inject(struct ip *ip, struct filter *f)
 }
 
 static void make_packet(struct ip *ip, struct tcphdr *tcp, uint32_t src,
-			uint32_t dst)
+			uint32_t dst, uint16_t sport, uint16_t dport)
 {
 	ip->ip_hl = sizeof(*ip) / 4;
 	ip->ip_v = 4;
@@ -260,6 +260,8 @@ static void make_packet(struct ip *ip, struct tcphdr *tcp, uint32_t src,
 	ip->ip_sum = 0;
 	ip->ip_src.s_addr = src;
 	ip->ip_dst.s_addr = dst;
+	tcp->th_sport = sport;
+	tcp->th_dport = dport;
 	/* FIXME: add MD5 signature if necessary */
 	compute_ip_checksum(ip);
 	compute_tcp_checksum(ip, tcp);
@@ -272,7 +274,7 @@ static void reset(struct connection *c, struct filter *f)
 		struct tcphdr tcp;
 	} packet;
 	tcpr_reset(&packet.tcp, c->state);
-	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address);
+	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
 	log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
@@ -284,7 +286,7 @@ static void recover(struct connection *c, struct filter *f)
 		struct tcphdr tcp;
 	} packet;
 	tcpr_recover(&packet.tcp, c->state);
-	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address);
+	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
 	log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
@@ -296,7 +298,7 @@ static void update(struct connection *c, struct filter *f)
 		struct tcphdr tcp;
 	} packet;
 	tcpr_update(&packet.tcp, c->state);
-	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr);
+	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr, c->port, c->peer_address.sin_port);
 	log_packet(f->external_log, &packet.ip);
 	inject(&packet.ip, f);
 }
