@@ -28,6 +28,8 @@ static int finished;
 
 static const char state_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".state";
 static const char ctl_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".ctl";
+static const char internal_log_path[] = "/var/tmp/tcpr-internal.pcap";
+static const char external_log_path[] = "/var/tmp/tcpr-external.pcap";
 
 struct connection {
 	struct tcpr *state;
@@ -38,8 +40,11 @@ struct connection {
 };
 
 struct filter {
+	int external_log;
+	int internal_log;
 	char *external_host;
 	char *internal_host;
+	int debugging;
 	int epoll_fd;
 	int netfilter_fd;
 	int raw_socket;
@@ -66,6 +71,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -e HOST    Let the peer connect to HOST.\n");
 	fprintf(stderr, "  -q NUMBER  "
 		"Get packets from netfilter queue NUMBER.\n");
+	fprintf(stderr, "  -d         Leave debugging logs.\n");
 	fprintf(stderr, "  -?         Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
@@ -74,6 +80,7 @@ static void handle_options(struct filter *f, int argc, char **argv)
 {
 	int o;
 
+	f->debugging = 0;
 	f->connections = NULL;
 	f->internal_host = "127.0.0.2";
 	f->external_host = "127.0.0.1";
@@ -81,7 +88,7 @@ static void handle_options(struct filter *f, int argc, char **argv)
 	f->max_events = 256;
 	f->queue_number = 0;
 
-	while ((o = getopt(argc, argv, "i:e:q:?")) != -1)
+	while ((o = getopt(argc, argv, "i:e:q:d?")) != -1)
 		switch (o) {
 		case 'i':
 			f->internal_host = optarg;
@@ -91,6 +98,9 @@ static void handle_options(struct filter *f, int argc, char **argv)
 			break;
 		case 'q':
 			f->queue_number = (uint16_t)atoi(optarg);
+			break;
+		case 'd':
+			f->debugging = 1;
 			break;
 		default:
 			print_help_and_exit(argv[0]);
@@ -190,6 +200,29 @@ static void drop(int id, struct filter *f)
 		fputs("Error dropping packet.\n", stderr);
 }
 
+static void log_packet(int log, struct ip *ip)
+{
+	uint32_t size;
+	struct timeval tv;
+	struct {
+		uint32_t ts_sec;
+		uint32_t ts_usec;
+		uint32_t incl_len;
+		uint32_t orig_len;
+	} header;
+
+	size = ntohs(ip->ip_len);
+	gettimeofday(&tv, NULL);
+	header.ts_sec = tv.tv_sec;
+	header.ts_usec = tv.tv_usec;
+	header.incl_len = size;
+	header.orig_len = size;
+	if (write(log, &header, sizeof(header)) != sizeof(header))
+		fprintf(stderr, "Error writing to log.\n");
+	if (write(log, ip, size) != (ssize_t)size)
+		fprintf(stderr, "Error writing to log.\n");
+}
+
 static void deliver(int id, struct ip *ip, struct tcphdr *tcp, struct filter *f)
 {
 	/* FIXME: recompute MD5 signature if necessary */
@@ -240,6 +273,7 @@ static void reset(struct connection *c, struct filter *f)
 	} packet;
 	tcpr_reset(&packet.tcp, c->state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address);
+	log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
 
@@ -251,6 +285,7 @@ static void recover(struct connection *c, struct filter *f)
 	} packet;
 	tcpr_recover(&packet.tcp, c->state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address);
+	log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
 
@@ -262,6 +297,7 @@ static void update(struct connection *c, struct filter *f)
 	} packet;
 	tcpr_update(&packet.tcp, c->state);
 	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr);
+	log_packet(f->external_log, &packet.ip);
 	inject(&packet.ip, f);
 }
 
@@ -456,13 +492,17 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	}
 
 	if (is_from_peer(ip, f)) {
+		log_packet(f->external_log, ip);
 		tcpr_filter_peer(c->state, tcp, tcp_size);
 		internalize_destination(ip, tcp, f);
+		log_packet(f->internal_log, ip);
 		deliver(id, ip, tcp, f);
 	} else {
+		log_packet(f->internal_log, ip);
 		switch (tcpr_filter(c->state, tcp, tcp_size)) {
 		case TCPR_DELIVER:
 			externalize_source(ip, tcp, f);
+			log_packet(f->external_log, ip);
 			deliver(id, ip, tcp, f);
 			break;
 		case TCPR_DROP:
@@ -529,6 +569,46 @@ static void setup_events(struct filter *f)
 	event.data.ptr = f;
 	if (epoll_ctl(f->epoll_fd, EPOLL_CTL_ADD, f->netfilter_fd, &event) < 0) {
 		perror("Error adding to epoll");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static int start_log(const char *path, struct filter *f)
+{
+	int fd;
+	struct {
+		uint32_t magic_number;
+		uint16_t version_major;
+		uint16_t version_minor;
+		int32_t  thiszone;
+		uint32_t sigfigs;
+		uint32_t snaplen;
+		uint32_t network;
+	} header = {0xa1b2c3d4, 2, 4, 0, 0, f->capture_size, 101};
+
+	fd = creat(path, 0664);
+	if (fd < 0)
+		return -1;
+
+	if (write(fd, &header, sizeof(header)) != sizeof(header))
+		fprintf(stderr, "Error writing log header.\n");;
+	return fd;
+}
+
+static void setup_logging(struct filter *f)
+{
+	if (!f->debugging)
+		return;
+
+	f->external_log = start_log(external_log_path, f);
+	if (f->external_log < 0) {
+		fprintf(stderr, "Error opening external log.\n");
+		exit(EXIT_FAILURE);
+	}
+
+	f->internal_log = start_log(internal_log_path, f);
+	if (f->internal_log < 0) {
+		fprintf(stderr, "Error opening external log.\n");
 		exit(EXIT_FAILURE);
 	}
 }
@@ -632,6 +712,14 @@ static void teardown_netfilter(struct filter *f)
 	nfq_close(f->netfilter_handle);
 }
 
+static void teardown_logging(struct filter *f)
+{
+	if (!f->debugging)
+		return;
+	close(f->external_log);
+	close(f->internal_log);
+}
+
 int main(int argc, char **argv)
 {
 	struct filter f;
@@ -643,6 +731,7 @@ int main(int argc, char **argv)
 
 	setup_addresses(&f);
 
+	setup_logging(&f);
 	setup_netfilter(&f);
 	setup_events(&f);
 	setup_raw_socket(&f);
@@ -653,6 +742,7 @@ int main(int argc, char **argv)
 	teardown_raw_socket(&f);
 	teardown_events(&f);
 	teardown_netfilter(&f);
+	teardown_logging(&f);
 
 	return EXIT_SUCCESS;
 }
