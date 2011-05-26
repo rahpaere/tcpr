@@ -181,7 +181,7 @@ static void setup_connection(struct chat *c)
 		freeaddrinfo(ai);
 
 		addrlen = sizeof(c->peer_address);
-		getpeername(s, (struct sockaddr *)&c->address, &addrlen);
+		getpeername(s, (struct sockaddr *)&c->peer_address, &addrlen);
 
 		c->flow_to_peer.dst = s;
 	} else {
@@ -226,17 +226,26 @@ static struct tcpr *get_state(struct sockaddr_in *peer_address, uint16_t port, i
 	if (create)
 		flags |= O_CREAT;
 	fd = open(path, flags, 0600);
-	if (fd < 0)
+	if (fd < 0) {
+		perror("Opening state file");
 		return NULL;
+	}
 	if (ftruncate(fd, sizeof(*state)) < 0) {
+		perror("Resizing state file");
 		close(fd);
 		return NULL;
 	}
 
 	flags = PROT_READ | PROT_WRITE;
 	state = mmap(NULL, sizeof(*state), flags, MAP_SHARED, fd, 0);
+	if (state == MAP_FAILED) {
+		perror("Mapping state file");
+		close(fd);
+		return NULL;
+	}
+
 	close(fd);
-	return state == MAP_FAILED ? NULL : state;
+	return state;
 }
 
 static void teardown_state(struct tcpr *state)
