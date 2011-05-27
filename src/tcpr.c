@@ -46,14 +46,14 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 	if (h->th_flags & TH_FIN) {
 		if (!t->saved.done_writing)
 			return TCPR_RESET;
-		t->fin = htonl(ntohl(t->seq) + 1 - t->saved.delta);
+		t->fin = htonl(ntohl(t->seq) + 1 - t->delta);
 		t->have_fin = 1;
 	}
 
 	if (!(h->th_flags & TH_ACK)) {
 		if (!t->peer.have_ack)
 			return TCPR_DELIVER;
-		t->saved.delta = ntohl(t->seq) - ntohl(t->peer.ack);
+		t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
 		t->saved.done_writing = 0;
 		return TCPR_RECOVER;
 	}
@@ -63,7 +63,7 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 		t->saved.ack = t->ack;
 		if (t->have_fin && t->peer.have_fin && t->peer.have_ack
 		    && t->peer.ack == t->fin && t->peer.fin == t->saved.ack)
-			t->saved.done = 1;
+			t->done = 1;
 	} else if (h->th_ack != t->saved.ack) {
 		if (size == (size_t)h->th_off * 4)
 			return TCPR_DROP;
@@ -73,7 +73,7 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 	}
 
 	sum += shorten(~h->th_seq);
-	h->th_seq = htonl(ntohl(h->th_seq) - t->saved.delta);
+	h->th_seq = htonl(ntohl(h->th_seq) - t->delta);
 	sum += shorten(h->th_seq);
 
 	if (h->th_sum)
@@ -102,10 +102,6 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 			t->saved.peer.ws = opt[2] + 1;
 			opt += opt[1];
 			break;
-		case TCPOPT_MD5:
-			t->saved.using_md5 = 1;
-			opt += opt[1];
-			break;
 		case TCPOPT_SACK_PERMITTED:
 			t->saved.peer.sack_permitted = 1;
 			opt += opt[1];
@@ -113,9 +109,10 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 		case TCPOPT_SACK:
 			for (sack = (uint32_t *)opt + 2;
 			     sack < (uint32_t *)opt + opt[1]; sack++)
-				*sack = htonl(ntohl(*sack) + t->saved.delta);
+				*sack = htonl(ntohl(*sack) + t->delta);
 			opt += opt[1];
 			break;
+		case TCPOPT_MD5:
 		case TCPOPT_TIMESTAMP:
 			opt += opt[1];
 			break;
@@ -144,10 +141,10 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 
 		if (t->have_fin && t->peer.have_fin && t->peer.ack == t->fin
 		    && t->peer.fin == t->saved.ack)
-			t->saved.done = 1;
+			t->done = 1;
 
 		sum += shorten(~h->th_ack);
-		h->th_ack = htonl(ntohl(h->th_ack) + t->saved.delta);
+		h->th_ack = htonl(ntohl(h->th_ack) + t->delta);
 		sum += shorten(h->th_ack);
 
 		if (h->th_sum)
@@ -187,12 +184,6 @@ void tcpr_recover(struct tcphdr *h, struct tcpr *t)
 		opt[i++] = 2;
 	}
 
-	if (t->saved.using_md5) {
-		opt[i++] = TCPOPT_MD5;
-		opt[i++] = 18;
-		i += 16;
-	}
-
 	if (i % 4)
 		opt[i++] = TCPOPT_EOL;
 	h->th_off += (i + 3) / 4;
@@ -204,10 +195,10 @@ void tcpr_update(struct tcphdr *h, struct tcpr *t)
 		t->saved.ack = t->ack;
 		if (t->have_fin && t->peer.have_fin && t->peer.have_ack
 		    && t->peer.ack == t->fin && t->peer.fin == t->saved.ack)
-			t->saved.done = 1;
+			t->done = 1;
 	}
 
-	h->th_seq = htonl(ntohl(t->seq) - t->saved.delta);
+	h->th_seq = htonl(ntohl(t->seq) - t->delta);
 	h->th_ack = t->saved.ack;
 	h->th_off = sizeof(*h) / 4;
 	h->th_x2 = 0;

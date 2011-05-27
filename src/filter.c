@@ -535,7 +535,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 		}
 	}
 
-	if (c->state->saved.done)
+	if (c->state->done)
 		teardown_connection(c, f);
 	return 0;
 }
@@ -686,7 +686,7 @@ static void handle_event(struct filter *f, struct epoll_event *e)
 		struct connection *c = e->data.ptr;
 		size = read(c->ctl_socket, data, sizeof(data));
 		update(c, f);
-		if (c->state->saved.done)
+		if (c->state->done)
 			teardown_connection(c, f);
 	}
 }
