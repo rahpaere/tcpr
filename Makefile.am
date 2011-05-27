@@ -7,10 +7,13 @@ tcpr_include_HEADERS = \
 	include/tcpr/filter.h \
 	include/tcpr/types.h
 
-bin_PROGRAMS = tcpr-chat tcpr-filter
+LDADD = libtcpr.a
+lib_LIBRARIES = libtcpr.a
+libtcpr_a_SOURCES = lib/tcpr.c lib/application.c
 
-tcpr_chat_SOURCES = src/chat.c src/application.c
-tcpr_filter_SOURCES = src/filter.c src/tcpr.c src/md5/md5.c src/md5util.c
+bin_PROGRAMS = tcpr-chat tcpr-filter
+tcpr_chat_SOURCES = src/chat.c
+tcpr_filter_SOURCES = src/filter.c src/md5/md5.c src/md5util.c
 
 TESTS = test/tcpr-test-setup-teardown \
 	test/tcpr-test-app-data \

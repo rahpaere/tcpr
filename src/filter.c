@@ -47,6 +47,7 @@ struct filter {
 	int debugging;
 	int epoll_fd;
 	int netfilter_fd;
+	int passthrough;
 	int raw_socket;
 	size_t capture_size;
 	size_t max_events;
@@ -71,6 +72,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -e HOST    Let the peer connect to HOST.\n");
 	fprintf(stderr, "  -q NUMBER  "
 		"Get packets from netfilter queue NUMBER.\n");
+	fprintf(stderr, "  -p         Pass packets through unchanged.\n");
 	fprintf(stderr, "  -d         Leave debugging logs.\n");
 	fprintf(stderr, "  -?         Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
@@ -80,6 +82,7 @@ static void handle_options(struct filter *f, int argc, char **argv)
 {
 	int o;
 
+	f->passthrough = 0;
 	f->debugging = 0;
 	f->connections = NULL;
 	f->internal_host = "127.0.0.2";
@@ -88,7 +91,7 @@ static void handle_options(struct filter *f, int argc, char **argv)
 	f->max_events = 256;
 	f->queue_number = 0;
 
-	while ((o = getopt(argc, argv, "i:e:q:d?")) != -1)
+	while ((o = getopt(argc, argv, "i:e:q:pd?")) != -1)
 		switch (o) {
 		case 'i':
 			f->internal_host = optarg;
@@ -98,6 +101,9 @@ static void handle_options(struct filter *f, int argc, char **argv)
 			break;
 		case 'q':
 			f->queue_number = (uint16_t)atoi(optarg);
+			break;
+		case 'p':
+			f->passthrough = 1;
 			break;
 		case 'd':
 			f->debugging = 1;
@@ -495,6 +501,15 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	nfq_get_payload(d, (char **)&ip);
 	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ip_hl);
 	tcp_size = htons(ip->ip_len) - ip->ip_hl * 4;
+
+	if (f->passthrough) {
+		if (f->debugging) {
+			log_packet(f->external_log, ip);
+			log_packet(f->internal_log, ip);
+		}
+		deliver(id, ip, tcp, f);
+		return 0;
+	}
 
 	c = get_connection(ip, tcp, f);
 	if (!c) {
