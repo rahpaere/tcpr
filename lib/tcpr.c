@@ -50,12 +50,16 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 		t->have_fin = 1;
 	}
 
-	if (!(h->th_flags & TH_ACK)) {
-		if (!t->peer.have_ack)
+	if (h->th_flags & TH_SYN) {
+		if (h->th_flags & TH_ACK) {
+			t->saved.safe = htonl(ntohl(h->th_seq) + 1);
+		} else if (!t->peer.have_ack) {
 			return TCPR_DELIVER;
-		t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
-		t->saved.done_writing = 0;
-		return TCPR_RECOVER;
+		} else {
+			t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
+			t->saved.done_writing = 0;
+			return TCPR_RECOVER;
+		}
 	}
 
 	t->ack = h->th_ack;
@@ -125,8 +129,11 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 
 	t->peer.win = h->th_win;
 
-	if (h->th_flags & TH_SYN)
+	if (h->th_flags & TH_SYN) {
 		t->saved.ack = htonl(ntohl(h->th_seq) + 1);
+		if (h->th_flags & TH_ACK)
+			t->saved.safe = h->th_ack;
+	}
 
 	if (h->th_flags & TH_FIN) {
 		t->peer.fin =

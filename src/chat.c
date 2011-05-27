@@ -303,6 +303,7 @@ static void handle_input(struct flow *f, struct chat *c, struct epoll_event *e)
 static void handle_output(struct flow *f, struct chat *c, struct epoll_event *e)
 {
 	ssize_t written;
+
 	written = write(f->dst, &f->buffer[f->written], f->read - f->written);
 	if (written < 0) {
 		perror("Writing output");

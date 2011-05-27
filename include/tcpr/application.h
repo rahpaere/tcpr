@@ -16,6 +16,8 @@ struct tcpr_connection {
 int tcpr_setup_connection(struct tcpr_connection *c, int sock);
 void tcpr_teardown_connection(struct tcpr_connection *c);
 
+size_t tcpr_safe(struct tcpr_connection *c);
+void tcpr_advance(struct tcpr_connection *c, size_t bytes);
 int tcpr_consume(struct tcpr_connection *c, size_t bytes);
 int tcpr_done_reading(struct tcpr_connection *c);
 void tcpr_done_writing(struct tcpr_connection *c);

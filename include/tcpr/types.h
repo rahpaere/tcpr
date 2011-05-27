@@ -5,6 +5,7 @@
 
 struct tcpr_saved {
 	uint32_t ack;
+	uint32_t safe;
 	struct {
 		uint16_t mss;
 		uint8_t ws;

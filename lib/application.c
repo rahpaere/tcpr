@@ -111,6 +111,16 @@ static int update(struct tcpr_connection *c)
 		      sizeof(c->control_address));
 }
 
+size_t tcpr_safe(struct tcpr_connection *c)
+{
+	return ntohl(c->state->peer.ack) - ntohl(c->state->saved.safe);
+}
+
+void tcpr_advance(struct tcpr_connection *c, size_t bytes)
+{
+	c->state->saved.safe = htonl(ntohl(c->state->saved.safe) + bytes);
+}
+
 int tcpr_consume(struct tcpr_connection *c, size_t bytes)
 {
 	c->state->saved.ack = htonl(ntohl(c->state->saved.ack) + bytes);
