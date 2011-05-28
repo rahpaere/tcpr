@@ -100,19 +100,23 @@ static void handle_options(struct chat *c, int argc, char **argv)
 			print_help_and_exit(argv[0]);
 		}
 
-	if (!c->connect_port && !c->connect_host && !c->bind_port && !c->bind_host) {
-		if (c->using_tcpr) {
-			c->bind_host = "127.0.0.2";
-		} else {
+	if (c->using_tcpr) {
+		if (!c->connect_host && !c->connect_port && !c->bind_host && !c->bind_port)
 			c->connect_host = "127.0.0.1";
+		if (!c->connect_port && c->connect_host)
+			c->connect_port = "9999";
+		if (!c->bind_host)
+			c->bind_host = "127.0.0.2";
+		if (!c->bind_port)
+			c->bind_port = "8888";
+	} else {
+		if (!c->connect_host && !c->connect_port && !c->bind_host && !c->bind_port)
 			c->bind_host = "127.0.0.1";
+		if (!c->bind_port && c->bind_host)
 			c->bind_port = "9999";
-		}
+		if (!c->connect_port && c->connect_host)
+			c->connect_port = "8888";
 	}
-	if (!c->connect_port && c->connect_host)
-		c->connect_port = "8888";
-	if (!c->bind_port && c->bind_host)
-		c->bind_port = "8888";
 };
 
 static void setup_connection(struct chat *c)
@@ -210,7 +214,8 @@ static void setup_tcpr(struct chat *c)
 {
 	if (!c->using_tcpr)
 		return;
-	if (tcpr_setup_connection(&c->tcpr, c->flow_to_peer.dst) < 0) {
+	if (tcpr_setup_connection
+	    (&c->tcpr, &c->peer_address, c->address.sin_port, 0) < 0) {
 		perror("Error setting up TCPR");
 		exit(EXIT_FAILURE);
 	}

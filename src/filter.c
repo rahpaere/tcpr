@@ -1,3 +1,4 @@
+#include <tcpr/application.h>
 #include <tcpr/filter.h>
 
 #include <arpa/inet.h>
@@ -26,15 +27,11 @@
 
 static int finished;
 
-static const char state_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".state";
-static const char ctl_path_format[] = "/var/tmp/tcpr-%s-%" PRId16 "-%" PRId16 ".ctl";
 static const char internal_log_path[] = "/var/tmp/tcpr-internal.pcap";
 static const char external_log_path[] = "/var/tmp/tcpr-external.pcap";
 
 struct connection {
-	struct tcpr *state;
-	int ctl_socket;
-	struct sockaddr_un ctl_address;
+	struct tcpr_connection tcpr;
 	struct sockaddr_in peer_address;
 	uint16_t port;
 };
@@ -57,6 +54,12 @@ struct filter {
 	uint16_t queue_number;
 	uint32_t external_address;
 	uint32_t internal_address;
+};
+
+struct packet {
+	struct ip ip;
+	struct tcphdr tcp;
+	uint8_t options[40];
 };
 
 static void print_help_and_exit(const char *program)
@@ -275,11 +278,8 @@ static void make_packet(struct ip *ip, struct tcphdr *tcp, uint32_t src,
 
 static void reset(struct connection *c, struct filter *f)
 {
-	struct {
-		struct ip ip;
-		struct tcphdr tcp;
-	} packet;
-	tcpr_reset(&packet.tcp, c->state);
+	struct packet packet;
+	tcpr_reset(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
 	if (f->debugging)
 		log_packet(f->internal_log, &packet.ip);
@@ -288,11 +288,8 @@ static void reset(struct connection *c, struct filter *f)
 
 static void recover(struct connection *c, struct filter *f)
 {
-	struct {
-		struct ip ip;
-		struct tcphdr tcp;
-	} packet;
-	tcpr_recover(&packet.tcp, c->state);
+	struct packet packet;
+	tcpr_recover(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
 	if (f->debugging)
 		log_packet(f->internal_log, &packet.ip);
@@ -301,11 +298,8 @@ static void recover(struct connection *c, struct filter *f)
 
 static void update(struct connection *c, struct filter *f)
 {
-	struct {
-		struct ip ip;
-		struct tcphdr tcp;
-	} packet;
-	tcpr_update(&packet.tcp, c->state);
+	struct packet packet;
+	tcpr_update(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr, c->port, c->peer_address.sin_port);
 	if (f->debugging)
 		log_packet(f->external_log, &packet.ip);
@@ -332,95 +326,14 @@ static int compare_connections(const void *a, const void *b)
 	return 0;
 }
 
-static struct tcpr *get_state(struct sockaddr_in *peer_address, uint16_t port, int create)
-{
-	char host[INET_ADDRSTRLEN];
-	char path[sizeof(state_path_format) + sizeof(host) + 10];
-	int flags;
-	int fd;
-	struct tcpr *state;
-
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	sprintf(path, state_path_format, host, ntohs(peer_address->sin_port), ntohs(port));
-
-	flags = O_RDWR;
-	if (create)
-		flags |= O_CREAT;
-	fd = open(path, flags, 0600);
-	if (fd < 0)
-		return NULL;
-	if (ftruncate(fd, sizeof(*state)) < 0) {
-		close(fd);
-		return NULL;
-	}
-
-	flags = PROT_READ | PROT_WRITE;
-	state = mmap(NULL, sizeof(*state), flags, MAP_SHARED, fd, 0);
-	close(fd);
-	return state == MAP_FAILED ? NULL : state;
-}
-
-static void teardown_state(struct tcpr *state)
-{
-	munmap(state, sizeof(*state));
-}
-
-static void unlink_state(struct sockaddr_in *peer_address, uint16_t port)
-{
-	char host[INET_ADDRSTRLEN];
-	char path[sizeof(state_path_format) + sizeof(host) + 10];
-
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	sprintf(path, state_path_format, host, ntohs(peer_address->sin_port), ntohs(port));
-	unlink(path);
-}
-
-static void setup_ctl_address(struct sockaddr_un *ctl_address, struct sockaddr_in *peer_address, uint16_t port)
-{
-	char host[INET_ADDRSTRLEN];
-
-	inet_ntop(AF_INET, &peer_address->sin_addr, host, sizeof(host));
-	memset(ctl_address, 0, sizeof(*ctl_address));
-	ctl_address->sun_family = AF_UNIX;
-	sprintf(ctl_address->sun_path, ctl_path_format, host, ntohs(peer_address->sin_port), ntohs(port));
-}
-
-static int get_ctl(struct sockaddr_un *ctl_address)
-{
-	int s;
-
-	s = socket(AF_UNIX, SOCK_DGRAM, 0);
-	if (s < 0)
-		return -1;
-	unlink(ctl_address->sun_path);
-	if (bind(s, (struct sockaddr *)ctl_address, sizeof(*ctl_address)) < 0) {
-		close(s);
-		return -1;
-	}
-	return s;
-}
-
-static void teardown_ctl(int s)
-{
-	close(s);
-}
-
 static int setup_connection_events(struct connection *c, struct filter *f)
 {
 	struct epoll_event event;
 
 	event.events = EPOLLIN;
 	event.data.ptr = c;
-	return epoll_ctl(f->epoll_fd, EPOLL_CTL_ADD, c->ctl_socket, &event);
-}
-
-static void teardown_connection(struct connection *c, struct filter *f)
-{
-	tdelete(c, (void **)&f->connections, compare_connections);
-	teardown_state(c->state);
-	teardown_ctl(c->ctl_socket);
-	unlink_state(&c->peer_address, c->port);
-	unlink(c->ctl_address.sun_path);
+	return epoll_ctl(f->epoll_fd, EPOLL_CTL_ADD, c->tcpr.control_socket,
+			 &event);
 }
 
 static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
@@ -429,6 +342,7 @@ static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
 	struct connection key;
 	struct connection *c;
 	struct connection **node;
+	int flags;
 
 	key.peer_address.sin_family = AF_INET;
 	if (is_from_peer(ip, f)) {
@@ -453,30 +367,23 @@ static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
 	c->peer_address.sin_port = key.peer_address.sin_port;
 	c->port = key.port;
 
-	c->state = get_state(&c->peer_address, c->port, !(tcp->th_flags & TH_ACK));
-	if (!c->state) {
-		free(c);
-		return NULL;
-	}
-
-	setup_ctl_address(&c->ctl_address, &c->peer_address, c->port);
-	c->ctl_socket = get_ctl(&c->ctl_address);
-	if (c->ctl_socket < 0) {
-		teardown_state(c->state);
+	flags = TCPR_CONNECTION_FILTER;
+	if (!(tcp->th_flags & TH_ACK))
+		flags |= TCPR_CONNECTION_CREATE;
+	if (tcpr_setup_connection(&c->tcpr, &c->peer_address, c->port, flags) <
+	    0) {
 		free(c);
 		return NULL;
 	}
 
 	if (setup_connection_events(c, f) < 0) {
-		teardown_state(c->state);
-		teardown_ctl(c->ctl_socket);
+		tcpr_teardown_connection(&c->tcpr);
 		free(c);
 		return NULL;
 	}
 
 	if (!tsearch(c, (void **)&f->connections, compare_connections)) {
-		teardown_state(c->state);
-		teardown_ctl(c->ctl_socket);
+		tcpr_teardown_connection(&c->tcpr);
 		free(c);
 		return NULL;
 	}
@@ -484,11 +391,18 @@ static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
 	return c;
 }
 
+static void teardown_connection(struct connection *c, struct filter *f)
+{
+	tdelete(c, (void **)&f->connections, compare_connections);
+	tcpr_teardown_connection(&c->tcpr);
+	tcpr_destroy_connection(&c->peer_address, c->port);
+}
+
 static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 			 struct nfq_data *d, void *a)
 {
 	size_t tcp_size;
-	struct connection *c;
+	struct connection *xyzzy;
 	struct filter *f = a;
 	struct ip *ip;
 	struct tcphdr *tcp;
@@ -511,8 +425,8 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 		return 0;
 	}
 
-	c = get_connection(ip, tcp, f);
-	if (!c) {
+	xyzzy = get_connection(ip, tcp, f);
+	if (!xyzzy) {
 		fprintf(stderr, "Could not find connection for packet.\n");
 		drop(id, f);
 		return 0;
@@ -521,7 +435,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	if (is_from_peer(ip, f)) {
 		if (f->debugging)
 			log_packet(f->external_log, ip);
-		tcpr_filter_peer(c->state, tcp, tcp_size);
+		tcpr_filter_peer(xyzzy->tcpr.state, tcp, tcp_size);
 		internalize_destination(ip, tcp, f);
 		if (f->debugging)
 			log_packet(f->internal_log, ip);
@@ -529,7 +443,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	} else {
 		if (f->debugging)
 			log_packet(f->internal_log, ip);
-		switch (tcpr_filter(c->state, tcp, tcp_size)) {
+		switch (tcpr_filter(xyzzy->tcpr.state, tcp, tcp_size)) {
 		case TCPR_DELIVER:
 			externalize_source(ip, tcp, f);
 			if (f->debugging)
@@ -541,17 +455,17 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 			break;
 		case TCPR_RESET:
 			drop(id, f);
-			reset(c, f);
+			reset(xyzzy, f);
 			break;
 		case TCPR_RECOVER:
 			drop(id, f);
-			recover(c, f);
+			recover(xyzzy, f);
 			break;
 		}
 	}
 
-	if (c->state->done)
-		teardown_connection(c, f);
+	if (xyzzy->tcpr.state->done)
+		teardown_connection(xyzzy, f);
 	return 0;
 }
 
@@ -699,9 +613,9 @@ static void handle_event(struct filter *f, struct epoll_event *e)
 		nfq_handle_packet(f->netfilter_handle, data, size);
 	} else {
 		struct connection *c = e->data.ptr;
-		size = read(c->ctl_socket, data, sizeof(data));
+		size = read(c->tcpr.control_socket, data, sizeof(data));
 		update(c, f);
-		if (c->state->done)
+		if (c->tcpr.state->done)
 			teardown_connection(c, f);
 	}
 }

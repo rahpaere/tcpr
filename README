@@ -74,19 +74,19 @@ configured for the demonstration, so no arguments are necessary.
 
   $ tcpr-filter
 
-In its own terminal, run the application as a server.
-
-  $ tcpr-chat
-
-In yet another terminal, run the peer as a client.
+In its own terminal, run the peer as a server.
 
   $ tcpr-chat -p
 
+In yet another terminal, run the application as a client.
+
+  $ tcpr-chat
+
 Now chat back and forth between the two endpoints.  You can kill the
 fault-tolerant application with control-C.  You can then recover by
-invoking it with options to connect back to the peer.
+running the application again as the client.
 
-  $ tcpr-chat -c 127.0.0.1:9999
+  $ tcpr-chat
 
 You can also kill and recover the filter in the same way, or even kill
 both and recover them simultaneously.  When you are finished at either

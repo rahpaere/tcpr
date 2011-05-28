@@ -7,13 +7,20 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-struct tcpr_connection {
-	struct tcpr *state;
-	struct sockaddr_un control_address;
-	int control_socket;
+enum tcpr_connection_flags {
+	TCPR_CONNECTION_CREATE = 0x1,
+	TCPR_CONNECTION_FILTER = 0x2,
 };
 
-int tcpr_setup_connection(struct tcpr_connection *c, int sock);
+struct tcpr_connection {
+	int control_socket;
+	struct sockaddr_un control_address;
+	struct tcpr *state;
+};
+
+int tcpr_setup_connection(struct tcpr_connection *c, struct sockaddr_in *peer,
+			  uint16_t port, int flags);
+void tcpr_destroy_connection(struct sockaddr_in *peer, uint16_t port);
 void tcpr_teardown_connection(struct tcpr_connection *c);
 
 size_t tcpr_safe(struct tcpr_connection *c);
