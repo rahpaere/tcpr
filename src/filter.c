@@ -402,7 +402,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 			 struct nfq_data *d, void *a)
 {
 	size_t tcp_size;
-	struct connection *xyzzy;
+	struct connection *c;
 	struct filter *f = a;
 	struct ip *ip;
 	struct tcphdr *tcp;
@@ -425,8 +425,8 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 		return 0;
 	}
 
-	xyzzy = get_connection(ip, tcp, f);
-	if (!xyzzy) {
+	c = get_connection(ip, tcp, f);
+	if (!c) {
 		fprintf(stderr, "Could not find connection for packet.\n");
 		drop(id, f);
 		return 0;
@@ -435,7 +435,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	if (is_from_peer(ip, f)) {
 		if (f->debugging)
 			log_packet(f->external_log, ip);
-		tcpr_filter_peer(xyzzy->tcpr.state, tcp, tcp_size);
+		tcpr_filter_peer(c->tcpr.state, tcp, tcp_size);
 		internalize_destination(ip, tcp, f);
 		if (f->debugging)
 			log_packet(f->internal_log, ip);
@@ -443,7 +443,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	} else {
 		if (f->debugging)
 			log_packet(f->internal_log, ip);
-		switch (tcpr_filter(xyzzy->tcpr.state, tcp, tcp_size)) {
+		switch (tcpr_filter(c->tcpr.state, tcp, tcp_size)) {
 		case TCPR_DELIVER:
 			externalize_source(ip, tcp, f);
 			if (f->debugging)
@@ -455,17 +455,17 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 			break;
 		case TCPR_RESET:
 			drop(id, f);
-			reset(xyzzy, f);
+			reset(c, f);
 			break;
 		case TCPR_RECOVER:
 			drop(id, f);
-			recover(xyzzy, f);
+			recover(c, f);
 			break;
 		}
 	}
 
-	if (xyzzy->tcpr.state->done)
-		teardown_connection(xyzzy, f);
+	if (c->tcpr.state->done)
+		teardown_connection(c, f);
 	return 0;
 }
 
