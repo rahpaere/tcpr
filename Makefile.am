@@ -11,10 +11,12 @@ LDADD = libtcpr.a
 lib_LIBRARIES = libtcpr.a
 libtcpr_a_SOURCES = lib/tcpr.c lib/application.c
 
-bin_PROGRAMS = tcpr-chat tcpr-filter tcpr-recovery
+bin_PROGRAMS = tcpr-chat tcpr-filter tcpr-recovery tcpr-throughput tcpr-latency
 tcpr_chat_SOURCES = src/chat.c
 tcpr_filter_SOURCES = src/filter.c src/md5/md5.c src/md5util.c
 tcpr_recovery_SOURCES = src/recovery.c
+tcpr_throughput_SOURCES = src/throughput.c
+tcpr_latency_SOURCES = src/latency.c
 
 TESTS = test/tcpr-test-setup-teardown \
 	test/tcpr-test-app-data \

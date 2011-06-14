@@ -606,10 +606,8 @@ static void handle_event(struct filter *f, struct epoll_event *e)
 
 	if (e->data.ptr == f) {
 		size = read(f->netfilter_fd, data, sizeof(data));
-		if (size < 0) {
+		if (size < 0)
 			perror("Error reading a packet");
-			exit(EXIT_FAILURE);
-		}
 		nfq_handle_packet(f->netfilter_handle, data, size);
 	} else {
 		struct connection *c = e->data.ptr;
