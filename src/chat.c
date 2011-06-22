@@ -1,6 +1,7 @@
 #include <tcpr/application.h>
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
 #include <netdb.h>
@@ -172,9 +173,11 @@ static void setup_connection(struct chat *c)
 			exit(EXIT_FAILURE);
 		}
 
-		if (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
+		while (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
 			perror("Connecting");
-			exit(EXIT_FAILURE);
+			if (errno != ECONNREFUSED)
+				exit(EXIT_FAILURE);
+			sleep(2);
 		}
 
 		freeaddrinfo(ai);

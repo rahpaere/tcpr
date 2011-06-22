@@ -28,6 +28,7 @@ struct latency {
 	int sock;
 	int using_tcpr;
 	int checkpointing;
+	int count;
 	struct sockaddr_in address;
 	struct sockaddr_in peer_address;
 	struct tcpr_connection tcpr;
@@ -44,6 +45,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b HOST[:PORT]  Bind to HOST at PORL.\n");
 	fprintf(stderr, "  -c HOST[:PORT]  Connect to HOST at PORL.\n");
 	fprintf(stderr, "  -d DURATION     Run for DURATION seconds.\n");
+	fprintf(stderr, "  -n COUNT        Measure COUNT times.\n");
 	fprintf(stderr, "  -p              Act as the peer.\n");
 	fprintf(stderr, "  -C              Bypass checkpointed acknowledgments.\n");
 	fprintf(stderr, "  -T              Bypass TCPR.\n");
@@ -75,9 +77,10 @@ static void handle_options(struct latency *l, int argc, char **argv)
 	l->using_tcpr = -1;
 	l->peer = 0;
 	l->checkpointing = 1;
-	l->duration = 10;
+	l->duration = 6;
+	l->count = 10;
 
-	while ((o = getopt(argc, argv, "b:c:d:pCT?")) != -1)
+	while ((o = getopt(argc, argv, "b:c:d:n:pCT?")) != -1)
 		switch (o) {
 		case 'b':
 			parse_address(optarg, &l->bind_host, &l->bind_port);
@@ -87,6 +90,9 @@ static void handle_options(struct latency *l, int argc, char **argv)
 			break;
 		case 'd':
 			l->duration = atoi(optarg);
+			break;
+		case 'n':
+			l->count = atoi(optarg);
 			break;
 		case 'p':
 			l->peer = 1;
@@ -171,9 +177,11 @@ static void setup_connection(struct latency *l)
 			exit(EXIT_FAILURE);
 		}
 
-		if (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
+		while (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
 			perror("Connecting");
-			exit(EXIT_FAILURE);
+			if (errno != ECONNREFUSED)
+				exit(EXIT_FAILURE);
+			sleep(2);
 		}
 
 		freeaddrinfo(ai);
@@ -219,34 +227,38 @@ static void benchmark_peer(struct latency *l)
 	struct timeval end;
 	struct timeval start;
 	ssize_t bytes;
-	unsigned long total = 0;
+	unsigned long total;
 	double duration;
 	double mean;
+	int count;
 
-	gettimeofday(&start, NULL);
-	for (;;) {
-		gettimeofday(&end, NULL);
+	for (count = 0; count < l->count; count++) {
+		total = 0;
+		gettimeofday(&start, NULL);
+		do {
+			bytes = read(l->sock, &msg, sizeof(msg));
+			if (bytes == 0) {
+				gettimeofday(&end, NULL);
+				break;
+			} else if (bytes != sizeof(msg)) {
+				perror("Error reading");
+				exit(EXIT_FAILURE);
+			}
 
-		bytes = read(l->sock, &msg, sizeof(msg));
-		if (bytes == 0) {
-			break;
-		} else if (bytes != sizeof(msg)) {
-			perror("Error reading");
-			exit(EXIT_FAILURE);
-		}
+			bytes = write(l->sock, &msg, sizeof(msg));
+			if (bytes != sizeof(msg)) {
+				perror("Error writing");
+				exit(EXIT_FAILURE);
+			}
 
-		bytes = write(l->sock, &msg, sizeof(msg));
-		if (bytes != sizeof(msg)) {
-			perror("Error writing");
-			exit(EXIT_FAILURE);
-		}
-
-		total++;
+			total++;
+			gettimeofday(&end, NULL);
+		} while (count + 1 == l->count || end.tv_sec < start.tv_sec + l->duration);
+		duration = (double)end.tv_sec - (double)start.tv_sec +
+			((double)end.tv_usec - (double)start.tv_usec) / 10e6;
+		mean = duration / (double)total;
+		printf("%lf\t%lu\t%lf\n", duration, total, mean);
 	}
-
-	duration = (double)end.tv_sec - (double)start.tv_sec + ((double)end.tv_usec - (double)start.tv_usec) / 10e6;
-	mean = duration / (double)total;
-	printf("%lf\t%lu\t%lf\n", duration, total, mean);
 }
 
 static void benchmark(struct latency *l)
@@ -255,44 +267,40 @@ static void benchmark(struct latency *l)
 	struct timeval end;
 	struct timeval start;
 	ssize_t bytes;
-	unsigned long total = 0;
+	unsigned long total;
 	double duration;
 	double mean;
+	int count;
 
 	if (l->using_tcpr && !l->checkpointing)
 		tcpr_done_reading(&l->tcpr);
 
-	gettimeofday(&start, NULL);
-	for (;;) {
-		gettimeofday(&end, NULL);
-		if (end.tv_sec >= start.tv_sec + l->duration)
-			break;
+	for (count = 0; count < l->count; count++) {
+		total = 0;
+		gettimeofday(&start, NULL);
+		do {
+			bytes = write(l->sock, &msg, sizeof(msg));
+			if (bytes != sizeof(msg)) {
+				perror("Error writing");
+				exit(EXIT_FAILURE);
+			}
 
-		bytes = write(l->sock, &msg, sizeof(msg));
-		if (bytes != sizeof(msg)) {
-			perror("Error writing");
-			exit(EXIT_FAILURE);
-		}
+			bytes = read(l->sock, &msg, sizeof(msg));
+			if (bytes != sizeof(msg)) {
+				perror("Error reading");
+				exit(EXIT_FAILURE);
+			}
+			if (l->using_tcpr && l->checkpointing)
+				tcpr_consume(&l->tcpr, sizeof(msg));
 
-		bytes = read(l->sock, &msg, sizeof(msg));
-		if (bytes != sizeof(msg)) {
-			perror("Error reading");
-			exit(EXIT_FAILURE);
-		}
-		if (l->using_tcpr && l->checkpointing)
-			tcpr_consume(&l->tcpr, sizeof(msg));
-
-		total++;
+			total++;
+			gettimeofday(&end, NULL);
+		} while (end.tv_sec < start.tv_sec + l->duration);
+		duration = (double)end.tv_sec - (double)start.tv_sec +
+			((double)end.tv_usec - (double)start.tv_usec) / 10e6;
+		mean = duration / (double)total;
+		printf("%lf\t%lu\t%lf\n", duration, total, mean);
 	}
-
-	if (l->using_tcpr) {
-		tcpr_done_writing(&l->tcpr);
-		shutdown(l->sock, SHUT_WR);
-	}
-
-	duration = (double)end.tv_sec - (double)start.tv_sec + ((double)end.tv_usec - (double)start.tv_usec) / 10e6;
-	mean = duration / (double)total;
-	printf("%lf\t%lu\t%lf\n", duration, total, mean);
 }
 
 static void teardown_connection(struct latency *l)

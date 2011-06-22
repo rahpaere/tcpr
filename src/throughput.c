@@ -29,6 +29,7 @@ struct throughput {
 	int sock;
 	int using_tcpr;
 	int checkpointing;
+	int count;
 	struct sockaddr_in address;
 	struct sockaddr_in peer_address;
 	struct tcpr_connection tcpr;
@@ -45,9 +46,11 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b HOST[:PORT]  Bind to HOST at PORT.\n");
 	fprintf(stderr, "  -c HOST[:PORT]  Connect to HOST at PORT.\n");
 	fprintf(stderr, "  -d DURATION     Run for DURATION seconds.\n");
+	fprintf(stderr, "  -n COUNT        Measure COUNT times.\n");
 	fprintf(stderr, "  -p              Act as the peer.\n");
-	fprintf(stderr, "  -s              Send data.\n");
-	fprintf(stderr, "  -C              Bypass checkpointed acknowledgments.\n");
+	fprintf(stderr, "  -r              Send data from peer.\n");
+	fprintf(stderr, "  -C              "
+		"Bypass checkpointed acknowledgments.\n");
 	fprintf(stderr, "  -T              Bypass TCPR.\n");
 	fprintf(stderr, "  -?              "
 		"Print this help message and exit.\n");
@@ -77,10 +80,11 @@ static void handle_options(struct throughput *t, int argc, char **argv)
 	t->using_tcpr = -1;
 	t->peer = 0;
 	t->checkpointing = 1;
-	t->sending = 0;
-	t->duration = 10;
+	t->sending = 1;
+	t->duration = 6;
+	t->count = 10;
 
-	while ((o = getopt(argc, argv, "b:c:d:psCT?")) != -1)
+	while ((o = getopt(argc, argv, "b:c:d:n:prCT?")) != -1)
 		switch (o) {
 		case 'b':
 			parse_address(optarg, &t->bind_host, &t->bind_port);
@@ -91,11 +95,14 @@ static void handle_options(struct throughput *t, int argc, char **argv)
 		case 'd':
 			t->duration = atoi(optarg);
 			break;
+		case 'n':
+			t->count = atoi(optarg);
+			break;
 		case 'p':
 			t->peer = 1;
 			break;
-		case 's':
-			t->sending = 1;
+		case 'r':
+			t->sending = !t->sending;
 			break;
 		case 'C':
 			t->checkpointing = 0;
@@ -109,8 +116,8 @@ static void handle_options(struct throughput *t, int argc, char **argv)
 
 	if (t->using_tcpr == -1)
 		t->using_tcpr = !t->peer;
-	if (t->sending == -1)
-		t->sending = !t->peer;
+	if (t->peer)
+		t->sending = !t->sending;
 	if (t->peer) {
 		if (!t->connect_host && !t->connect_port && !t->bind_host && !t->bind_port)
 			t->bind_host = "127.0.0.1";
@@ -179,9 +186,11 @@ static void setup_connection(struct throughput *t)
 			exit(EXIT_FAILURE);
 		}
 
-		if (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
+		while (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
 			perror("Connecting");
-			exit(EXIT_FAILURE);
+			if (errno != ECONNREFUSED)
+				exit(EXIT_FAILURE);
+			sleep(2);
 		}
 
 		freeaddrinfo(ai);
@@ -227,33 +236,30 @@ static void benchmark_sending(struct throughput *t)
 	struct timeval end;
 	struct timeval start;
 	ssize_t bytes;
-	unsigned long total = 0;
+	unsigned long total;
 	double duration;
 	double mean;
+	int count;
 
 	memset(buffer, '\n', sizeof(buffer));
-	gettimeofday(&start, NULL);
-	for (;;) {
-		bytes = write(t->sock, buffer, sizeof(buffer));
-		gettimeofday(&end, NULL);
-		if (bytes < 0) {
-			perror("Error writing");
-			exit(EXIT_FAILURE);
-		}
+	for (count = 0; count < t->count; count++) {
+		total = 0;
+		gettimeofday(&start, NULL);
+		do {
+			bytes = write(t->sock, buffer, sizeof(buffer));
+			if (bytes < 0) {
+				perror("Error writing");
+				exit(EXIT_FAILURE);
+			}
 
-		total += bytes;
-		if (end.tv_sec >= start.tv_sec + t->duration)
-			break;
+			total += bytes;
+			gettimeofday(&end, NULL);
+		} while (end.tv_sec < start.tv_sec + t->duration);
+		duration = (double)end.tv_sec - (double)start.tv_sec +
+			((double)end.tv_usec - (double)start.tv_usec) / 10e6;
+		mean = (double)total / duration;
+		printf("%lf\t%lu\t%lf\n", duration, total, mean);
 	}
-
-	if (t->using_tcpr) {
-		tcpr_done_writing(&t->tcpr);
-		shutdown(t->sock, SHUT_WR);
-	}
-
-	duration = (double)end.tv_sec - (double)start.tv_sec + ((double)end.tv_usec - (double)start.tv_usec) / 10e6;
-	mean = (double)total / duration;
-	printf("%lf\t%lu\t%lf\n", duration, total, mean);
 }
 
 static void benchmark_receiving(struct throughput *t)
@@ -262,32 +268,35 @@ static void benchmark_receiving(struct throughput *t)
 	struct timeval end;
 	struct timeval start;
 	ssize_t bytes;
-	unsigned long total = 0;
+	unsigned long total;
 	double duration;
 	double mean;
+	int count;
 
 	if (t->using_tcpr && !t->checkpointing)
 		tcpr_done_reading(&t->tcpr);
 
-	gettimeofday(&start, NULL);
-	for (;;) {
-		bytes = read(t->sock, buffer, sizeof(buffer));
-		gettimeofday(&end, NULL);
-		if (bytes < 0) {
-			perror("Error reading");
-			exit(EXIT_FAILURE);
-		} else if (bytes == 0) {
-			break;
-		}
+	for (count = 0; count < t->count; count++) {
+		total = 0;
+		gettimeofday(&start, NULL);
+		do {
+			bytes = read(t->sock, buffer, sizeof(buffer));
+			if (bytes < 0) {
+				perror("Error reading");
+				exit(EXIT_FAILURE);
+			}
 
-		total += bytes;
-		if (t->using_tcpr && t->checkpointing)
-			tcpr_consume(&t->tcpr, bytes);
+			total += bytes;
+			if (t->using_tcpr && t->checkpointing)
+				tcpr_consume(&t->tcpr, bytes);
+
+			gettimeofday(&end, NULL);
+		} while (bytes && (count + 1 == t->count || end.tv_sec < start.tv_sec + t->duration));
+		duration = (double)end.tv_sec - (double)start.tv_sec +
+			((double)end.tv_usec - (double)start.tv_usec) / 10e6;
+		mean = (double)total / duration;
+		printf("%lf\t%lu\t%lf\n", duration, total, mean);
 	}
-
-	duration = (double)end.tv_sec - (double)start.tv_sec + ((double)end.tv_usec - (double)start.tv_usec) / 10e6;
-	mean = (double)total / duration;
-	printf("%lf\t%lu\t%lf\n", duration, total, mean);
 }
 
 static void teardown_connection(struct throughput *t)

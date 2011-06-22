@@ -143,12 +143,12 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 	}
 
 	if (h->th_flags & TH_ACK) {
-		t->peer.ack = h->th_ack;
-		t->peer.have_ack = 1;
-
-		if (t->have_fin && t->peer.have_fin && t->peer.ack == t->fin
-		    && t->peer.fin == t->saved.ack)
-			t->done = 1;
+		if (!(h->th_flags & TH_RST)) {
+			t->peer.ack = h->th_ack;
+			t->peer.have_ack = 1;
+			if (t->have_fin && t->peer.have_fin && t->peer.ack == t->fin && t->peer.fin == t->saved.ack)
+				t->done = 1;
+		}
 
 		sum += shorten(~h->th_ack);
 		h->th_ack = htonl(ntohl(h->th_ack) + t->delta);

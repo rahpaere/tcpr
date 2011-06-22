@@ -27,6 +27,7 @@ struct recovery {
 	const char *connect_port;
 	int sock;
 	int using_tcpr;
+	int count;
 	time_t duration;
 	struct sockaddr_in address;
 	struct sockaddr_in peer_address;
@@ -43,6 +44,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b HOST[:PORT]  Bind to HOST at PORT.\n");
 	fprintf(stderr, "  -c HOST[:PORT]  Connect to HOST at PORT.\n");
 	fprintf(stderr, "  -d DURATION     Run for DURATION seconds.\n");
+	fprintf(stderr, "  -n COUNT        Measure COUNT times.\n");
 	fprintf(stderr, "  -p              Act as the peer.\n");
 	fprintf(stderr, "  -?              "
 		"Print this help message and exit.\n");
@@ -70,7 +72,8 @@ static void handle_options(struct recovery *r, int argc, char **argv)
 	r->connect_host = NULL;
 	r->connect_port = NULL;
 	r->using_tcpr = 1;
-	r->duration = 10;
+	r->duration = 6;
+	r->count = 10;
 
 	while ((o = getopt(argc, argv, "b:c:d:p?")) != -1)
 		switch (o) {
@@ -82,6 +85,9 @@ static void handle_options(struct recovery *r, int argc, char **argv)
 			break;
 		case 'd':
 			r->duration = atoi(optarg);
+			break;
+		case 'n':
+			r->count = atoi(optarg);
 			break;
 		case 'p':
 			r->using_tcpr = 0;
@@ -158,9 +164,11 @@ static void setup_connection(struct recovery *r)
 			exit(EXIT_FAILURE);
 		}
 
-		if (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
+		while (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
 			perror("Connecting");
-			exit(EXIT_FAILURE);
+			if (errno != ECONNREFUSED)
+				exit(EXIT_FAILURE);
+			sleep(2);
 		}
 
 		freeaddrinfo(ai);
@@ -205,15 +213,13 @@ static void benchmark_peer(struct recovery *r)
 	char buf[256];
 	ssize_t bytes;
 
-	for (;;) {
+	do {
 		bytes = read(r->sock, buf, sizeof(buf));
 		if (bytes < 0) {
 			perror("Error reading from socket");
 			exit(EXIT_FAILURE);
-		} else if (bytes == 0) {
-			break;
 		}
-	}
+	} while (bytes);
 }
 
 static void fail(struct recovery *r)
@@ -251,24 +257,25 @@ static void benchmark(struct recovery *r)
 {
 	struct timeval start;
 	struct timeval end;
-	unsigned long count;
+	unsigned long total;
 	double duration;
 	double mean;
+	int count;
 
-	gettimeofday(&start, NULL);
-	for (count = 0;; count++) {
-		fail(r);
-		recover(r);
-
-		gettimeofday(&end, NULL);
-		if (end.tv_sec >= start.tv_sec + r->duration)
-			break;
+	for (count = 0; count < r->count; count++) {
+		total = 0;
+		gettimeofday(&start, NULL);
+		do {
+			fail(r);
+			recover(r);
+			++total;
+			gettimeofday(&end, NULL);
+		} while (end.tv_sec < start.tv_sec + r->duration);
+		duration = (double)end.tv_sec - (double)start.tv_sec +
+			((double)end.tv_usec - (double)start.tv_usec) / 10e6;
+		mean = duration / (double)total;
+		printf("%lf\t%lu\t%lf\n", duration, total, mean);
 	}
-
-	duration = (double)end.tv_sec - (double)start.tv_sec
-			+ ((double)end.tv_usec - (double)start.tv_usec) / 10e6;
-	mean = duration / (double)count;
-	printf("%lf\t%lu\t%lf\n", duration, count, mean);
 }
 
 static void teardown_connection(struct recovery *r)
