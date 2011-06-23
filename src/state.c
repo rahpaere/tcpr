@@ -125,7 +125,7 @@ static void print_state(struct state *s)
 	fprintf(stderr, "Saved ACK: %"PRIu32"\n", ntohl(s->tcpr.state->saved.ack));
 	fprintf(stderr, "Saved peer ACK: %"PRIu32"\n", ntohl(s->tcpr.state->saved.safe));
 	if (s->tcpr.state->saved.peer.mss)
-		fprintf(stderr, "Peer MSS: %"PRIu16"\n", ntohs(s->tcpr.state->saved.peer.mss));
+		fprintf(stderr, "Peer MSS: %"PRIu16"\n", s->tcpr.state->saved.peer.mss);
 	if (s->tcpr.state->saved.peer.ws)
 		fprintf(stderr, "Peer WS: %"PRIu8"\n", s->tcpr.state->saved.peer.ws - 1);
 	if (s->tcpr.state->saved.peer.sack_permitted)
@@ -135,12 +135,12 @@ static void print_state(struct state *s)
 	if (s->tcpr.state->have_fin)
 		fprintf(stderr, "FIN: %"PRIu32"\n", ntohl(s->tcpr.state->fin));
 	fprintf(stderr, "SEQ: %"PRIu32"\n", ntohl(s->tcpr.state->seq));
-	fprintf(stderr, "WIN: %"PRIu32"\n", ntohl(s->tcpr.state->win));
+	fprintf(stderr, "WIN: %"PRIu16"\n", ntohs(s->tcpr.state->win));
 	if (s->tcpr.state->peer.have_ack)
 		fprintf(stderr, "Peer ACK: %"PRIu32"\n", ntohl(s->tcpr.state->peer.ack));
 	if (s->tcpr.state->peer.have_fin)
 		fprintf(stderr, "Peer FIN: %"PRIu32"\n", ntohl(s->tcpr.state->peer.fin));
-	fprintf(stderr, "Peer WIN: %"PRIu32"\n", ntohl(s->tcpr.state->peer.win));
+	fprintf(stderr, "Peer WIN: %"PRIu16"\n", ntohs(s->tcpr.state->peer.win));
 	if (s->tcpr.state->saved.done_reading)
 		fprintf(stderr, "Done reading.\n");
 	if (s->tcpr.state->saved.done_writing)

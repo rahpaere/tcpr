@@ -308,6 +308,10 @@ static void teardown_connection(struct latency *l)
 	if (l->using_tcpr) {
 		tcpr_done_writing(&l->tcpr);
 		tcpr_done_reading(&l->tcpr);
+		if (shutdown(l->sock, SHUT_RDWR) < 0)
+			perror("Shutting down connection");
+		while (!l->tcpr.state->done)
+			sleep(1);
 	}
 	if (close(l->sock) < 0)
 		perror("Closing connection");

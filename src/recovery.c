@@ -283,6 +283,10 @@ static void teardown_connection(struct recovery *r)
 	if (r->using_tcpr) {
 		tcpr_done_writing(&r->tcpr);
 		tcpr_done_reading(&r->tcpr);
+		if (shutdown(r->sock, SHUT_RDWR) < 0)
+			perror("Shutting down connection");
+		while (!r->tcpr.state->done)
+			sleep(1);
 	}
 	if (close(r->sock) < 0)
 		perror("Closing connection");

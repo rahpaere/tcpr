@@ -360,19 +360,21 @@ static void teardown_events(struct chat *c)
 	close(c->epoll_fd);
 }
 
-static void teardown_tcpr(struct chat *c)
-{
-	if (!c->using_tcpr)
-		return;
-	tcpr_teardown_connection(&c->tcpr);
-}
-
 static void teardown_connection(struct chat *c)
 {
+	if (c->using_tcpr)
+		while (!c->tcpr.state->done)
+			sleep(1);
 	if (close(c->flow_to_peer.dst) < 0)
 		perror("Closing connection");
 	if (close(c->flow_to_user.src) < 0)
 		perror("Closing connection");
+}
+
+static void teardown_tcpr(struct chat *c)
+{
+	if (c->using_tcpr)
+		tcpr_teardown_connection(&c->tcpr);
 }
 
 int main(int argc, char **argv)
@@ -388,8 +390,8 @@ int main(int argc, char **argv)
 	handle_events(&c);
 
 	teardown_events(&c);
-	teardown_tcpr(&c);
 	teardown_connection(&c);
+	teardown_tcpr(&c);
 
 	return EXIT_SUCCESS;
 }

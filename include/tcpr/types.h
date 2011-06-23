@@ -21,11 +21,11 @@ struct tcpr {
 	uint32_t ack;
 	uint32_t fin;
 	uint32_t seq;
-	uint32_t win;
+	uint16_t win;
 	struct {
 		uint32_t ack;
 		uint32_t fin;
-		uint32_t win;
+		uint16_t win;
 		uint8_t have_fin;
 		uint8_t have_ack;
 	} peer;
