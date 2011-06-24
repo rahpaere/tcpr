@@ -4,14 +4,15 @@ EXTERNAL=127.0.0.1
 INTERNAL=127.0.0.2
 PEER=127.0.0.1
 
+PASSPORT=6666
 RAWPORT=7777
 PORT=8888
 PEERPORT=9999
 
 RAWARGS="-b $EXTERNAL:$RAWPORT -c $PEER:$PEERPORT -T"
+PASSARGS="-b $EXTERNAL:$PASSPORT -c $PEER:$PEERPORT -T"
+NOCHECKARGS="-b $INTERNAL:$PORT -c $PEER:$PEERPORT -C"
 ARGS="-b $INTERNAL:$PORT -c $PEER:$PEERPORT"
-PASSARGS="$ARGS -T"
-NOCHECKARGS="$ARGS -C"
 PEERARGS="-b $PEER:$PEERPORT -p"
 
 restore_firewall() {
@@ -44,6 +45,8 @@ sudo iptables-restore <<EOF
 :OUTPUT ACCEPT [0:0]
 -A INPUT -d $EXTERNAL/32 -p tcp -m tcp --dport $PORT -j NFQUEUE --queue-num 0
 -A OUTPUT -s $INTERNAL/32 -p tcp -m tcp --sport $PORT -j NFQUEUE --queue-num 0
+-A INPUT -d $EXTERNAL/32 -p tcp -m tcp --dport $PASSPORT -j NFQUEUE --queue-num 0
+-A OUTPUT -s $EXTERNAL/32 -p tcp -m tcp --sport $PASSPORT -j NFQUEUE --queue-num 0
 COMMIT
 EOF
 

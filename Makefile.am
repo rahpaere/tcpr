@@ -1,4 +1,4 @@
-EXTRA_DIST = LICENSE netperf-2.4.5-tcpr.patch
+EXTRA_DIST = LICENSE benchmark/measure.sh
 AM_CFLAGS = -D_BSD_SOURCE -Wall -Wextra -I$(srcdir)/include
 
 tcpr_includedir=$(includedir)/tcpr
