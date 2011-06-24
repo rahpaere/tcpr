@@ -75,7 +75,7 @@ static void handle_options(struct recovery *r, int argc, char **argv)
 	r->duration = 6;
 	r->count = 10;
 
-	while ((o = getopt(argc, argv, "b:c:d:p?")) != -1)
+	while ((o = getopt(argc, argv, "b:c:d:n:p?")) != -1)
 		switch (o) {
 		case 'b':
 			parse_address(optarg, &r->bind_host, &r->bind_port);
