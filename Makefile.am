@@ -1,6 +1,8 @@
 EXTRA_DIST = LICENSE benchmark/measure.sh
 AM_CFLAGS = -D_BSD_SOURCE -Wall -Wextra -I$(srcdir)/include
 
+dist_bin_SCRIPTS = scripts/tcpr-setup-iptables scripts/tcpr-restore-iptables
+
 tcpr_includedir=$(includedir)/tcpr
 tcpr_include_HEADERS = \
 	include/tcpr/application.h \

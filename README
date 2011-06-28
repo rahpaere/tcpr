@@ -53,21 +53,19 @@ arbitrary address to use internally.
 
   # ip addr add dev lo 127.0.0.2/32
 
-To double check, list the current addresses.
-
-  $ ip addr
-
 Now it is necessary to configure the Linux builtin firewall, Netfilter,
-to capture the appropriate packets and send them to userspace for the
-filter.  Restrict the captured packets by port to avoid disturbing your
-other traffic.
+to capture the appropriate packets and send them to userspace for
+the filter.  The tcpr-setup-iptables script is installed to make such
+configuration easy.
 
-  # iptables -A OUTPUT -s 127.0.0.2 -j NFQUEUE
-  # iptables -A INPUT -d 127.0.0.1 -p tcp --dport 8888 -j NFQUEUE
+  # tcpr-setup-iptables
 
-To double check, list the current rules.
+The previously-installed firewall rules are removed, but saved in a file
+in the working directory.  To clean up when finished, remove the extra
+address and restore the firewall.
 
-  # iptables -nL
+  # ip addr del dev lo 127.0.0.2/32
+  # tcpr-restore-iptables
 
 Now run the filter.  The default internal and external addresses are
 configured for the demonstration, so no arguments are necessary.
@@ -101,18 +99,10 @@ to set up another terminal to watch the state various connections are in.
 
   $ watch 'netstat -n | grep 127\\.'
 
-To clean up, remove the addresses and filter rules you added.
-
-  # ip addr del dev lo 127.0.0.2/32
-
-  # iptables -D OUTPUT -s 127.0.0.2 -j NFQUEUE
-  # iptables -D INPUT -d 127.0.0.1 -p tcp --dport 8888 -j NFQUEUE
-
 If the application crashes but you move on to something else without
-recovering and closing gracefully, its state will lie about and confuse
-the application into recovering the next time you mean to reestablish
-the connection fresh.  Find the relevant files in /var/tmp and delete
-and then start over.
+recovering and closing gracefully, its old might confuse the application
+into recovering when you mean to establish a fresh connection.  Find the
+relevant files in /var/tmp and delete and then start over.
 
   $ rm -f /var/tmp/tcpr-127.0.0.1-9999-8888.state
   $ rm -f /var/tmp/tcpr-127.0.0.1-9999-8888.ctl

@@ -1,0 +1,5 @@
+#! /bin/sh
+
+test -f iptables.saved &&
+iptables-restore < iptables.saved &&
+rm iptables.saved
