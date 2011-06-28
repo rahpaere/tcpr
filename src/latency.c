@@ -42,8 +42,8 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "Benchmark TCPR latency.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Options:\n");
-	fprintf(stderr, "  -b HOST[:PORT]  Bind to HOST at PORL.\n");
-	fprintf(stderr, "  -c HOST[:PORT]  Connect to HOST at PORL.\n");
+	fprintf(stderr, "  -b HOST[:PORT]  Bind to HOST at PORT.\n");
+	fprintf(stderr, "  -c HOST[:PORT]  Connect to HOST at PORT.\n");
 	fprintf(stderr, "  -d DURATION     Run for DURATION seconds.\n");
 	fprintf(stderr, "  -n COUNT        Measure COUNT times.\n");
 	fprintf(stderr, "  -p              Act as the peer.\n");
