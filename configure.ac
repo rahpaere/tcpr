@@ -1,4 +1,4 @@
-AC_INIT([TCPR], [1.0], [burgess@cs.cornell.edu])
+AC_INIT([TCPR], [1.0], [Robert Surton <burgess@cs.cornell.edu>])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_SRCDIR([include/tcpr/types.h])
 
