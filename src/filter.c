@@ -29,6 +29,7 @@ static int finished;
 
 static const char internal_log_path[] = "/var/tmp/tcpr-internal.pcap";
 static const char external_log_path[] = "/var/tmp/tcpr-external.pcap";
+static const char other_log_path[] = "/var/tmp/tcpr-other.pcap";
 
 struct connection {
 	struct tcpr_connection tcpr;
@@ -39,6 +40,7 @@ struct connection {
 struct filter {
 	int external_log;
 	int internal_log;
+	int other_log;
 	char *external_host;
 	char *internal_host;
 	int debugging;
@@ -227,9 +229,9 @@ static void log_packet(int log, struct ip *ip)
 	header.incl_len = size;
 	header.orig_len = size;
 	if (write(log, &header, sizeof(header)) != sizeof(header))
-		fprintf(stderr, "Error writing to log.\n");
+		perror("Writing to log");
 	if (write(log, ip, size) != (ssize_t)size)
-		fprintf(stderr, "Error writing to log.\n");
+		perror("Writing to log");
 }
 
 static void deliver(int id, struct ip *ip, struct tcphdr *tcp, struct filter *f)
@@ -417,17 +419,16 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	tcp_size = htons(ip->ip_len) - ip->ip_hl * 4;
 
 	if (f->passthrough) {
-		if (f->debugging) {
-			log_packet(f->external_log, ip);
-			log_packet(f->internal_log, ip);
-		}
+		if (f->debugging)
+			log_packet(f->other_log, ip);
 		deliver(id, ip, tcp, f);
 		return 0;
 	}
 
 	c = get_connection(ip, tcp, f);
 	if (!c) {
-		fprintf(stderr, "Could not find connection for packet.\n");
+		if (f->debugging)
+			log_packet(f->other_log, ip);
 		drop(id, f);
 		return 0;
 	}
@@ -531,12 +532,19 @@ static int start_log(const char *path, struct filter *f)
 		uint32_t network;
 	} header = {0xa1b2c3d4, 2, 4, 0, 0, f->capture_size, 101};
 
-	fd = creat(path, 0664);
-	if (fd < 0)
-		return -1;
-
-	if (write(fd, &header, sizeof(header)) != sizeof(header))
-		fprintf(stderr, "Error writing log header.\n");;
+	fd = open(path, O_WRONLY | O_CREAT, 0664);
+	if (fd < 0) {
+		perror("Opening log");
+		exit(EXIT_FAILURE);
+	}
+	if (write(fd, &header, sizeof(header)) != sizeof(header)) {
+		perror("Writing log header");
+		exit(EXIT_FAILURE);
+	}
+	if (lseek(fd, 0, SEEK_END) < 0) {
+		perror("Seeking in log");
+		exit(EXIT_FAILURE);
+	}
 	return fd;
 }
 
@@ -544,18 +552,9 @@ static void setup_logging(struct filter *f)
 {
 	if (!f->debugging)
 		return;
-
 	f->external_log = start_log(external_log_path, f);
-	if (f->external_log < 0) {
-		fprintf(stderr, "Error opening external log.\n");
-		exit(EXIT_FAILURE);
-	}
-
 	f->internal_log = start_log(internal_log_path, f);
-	if (f->internal_log < 0) {
-		fprintf(stderr, "Error opening external log.\n");
-		exit(EXIT_FAILURE);
-	}
+	f->other_log = start_log(other_log_path, f);
 }
 
 static void setup_addresses(struct filter *f)
@@ -571,7 +570,7 @@ static void setup_addresses(struct filter *f)
 
 	err = getaddrinfo(f->internal_host, NULL, &hints, &ai);
 	if (err) {
-		fprintf(stderr, "Error resolving internal address: %s\n",
+		fprintf(stderr, "Resolving internal address: %s\n",
 			gai_strerror(err));
 		exit(EXIT_FAILURE);
 	}
@@ -581,7 +580,7 @@ static void setup_addresses(struct filter *f)
 
 	err = getaddrinfo(f->external_host, NULL, &hints, &ai);
 	if (err) {
-		fprintf(stderr, "Error resolving internal address: %s\n",
+		fprintf(stderr, "Resolving internal address: %s\n",
 			gai_strerror(err));
 		exit(EXIT_FAILURE);
 	}
@@ -661,6 +660,7 @@ static void teardown_logging(struct filter *f)
 		return;
 	close(f->external_log);
 	close(f->internal_log);
+	close(f->other_log);
 }
 
 int main(int argc, char **argv)
