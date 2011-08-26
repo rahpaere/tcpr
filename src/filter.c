@@ -43,7 +43,7 @@ struct filter {
 	int other_log;
 	char *external_host;
 	char *internal_host;
-	int debugging;
+	int logging;
 	int epoll_fd;
 	int netfilter_fd;
 	int passthrough;
@@ -73,12 +73,15 @@ static void print_help_and_exit(const char *program)
 		"migrate its TCP connections.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Options:\n");
-	fprintf(stderr, "  -i HOST    Let the application bind to HOST.\n");
-	fprintf(stderr, "  -e HOST    Let the peer connect to HOST.\n");
+	fprintf(stderr, "  -i HOST    "
+		"Internally, the application is bound to HOST.\n");
+	fprintf(stderr, "  -e HOST    "
+		"Externally, the application is bound to HOST.\n");
 	fprintf(stderr, "  -q NUMBER  "
-		"Get packets from netfilter queue NUMBER.\n");
-	fprintf(stderr, "  -p         Pass packets through unchanged.\n");
-	fprintf(stderr, "  -d         Leave debugging logs.\n");
+		"Filter packets on netfilter queue NUMBER.\n");
+	fprintf(stderr, "  -T         "
+		"Do not use TCPR; deliver packets unchanged.\n");
+	fprintf(stderr, "  -l         Log packet traces.\n");
 	fprintf(stderr, "  -?         Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
@@ -88,7 +91,7 @@ static void handle_options(struct filter *f, int argc, char **argv)
 	int o;
 
 	f->passthrough = 0;
-	f->debugging = 0;
+	f->logging = 0;
 	f->connections = NULL;
 	f->internal_host = "127.0.0.2";
 	f->external_host = "127.0.0.1";
@@ -96,7 +99,7 @@ static void handle_options(struct filter *f, int argc, char **argv)
 	f->max_events = 256;
 	f->queue_number = 0;
 
-	while ((o = getopt(argc, argv, "i:e:q:pd?")) != -1)
+	while ((o = getopt(argc, argv, "i:e:q:Tl?")) != -1)
 		switch (o) {
 		case 'i':
 			f->internal_host = optarg;
@@ -107,11 +110,11 @@ static void handle_options(struct filter *f, int argc, char **argv)
 		case 'q':
 			f->queue_number = (uint16_t)atoi(optarg);
 			break;
-		case 'p':
+		case 'T':
 			f->passthrough = 1;
 			break;
-		case 'd':
-			f->debugging = 1;
+		case 'l':
+			f->logging = 1;
 			break;
 		default:
 			print_help_and_exit(argv[0]);
@@ -283,7 +286,7 @@ static void reset(struct connection *c, struct filter *f)
 	struct packet packet;
 	tcpr_reset(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
-	if (f->debugging)
+	if (f->logging)
 		log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
@@ -293,7 +296,7 @@ static void recover(struct connection *c, struct filter *f)
 	struct packet packet;
 	tcpr_recover(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
-	if (f->debugging)
+	if (f->logging)
 		log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
 }
@@ -303,7 +306,7 @@ static void update(struct connection *c, struct filter *f)
 	struct packet packet;
 	tcpr_update(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr, c->port, c->peer_address.sin_port);
-	if (f->debugging)
+	if (f->logging)
 		log_packet(f->external_log, &packet.ip);
 	inject(&packet.ip, f);
 }
@@ -419,7 +422,7 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 	tcp_size = htons(ip->ip_len) - ip->ip_hl * 4;
 
 	if (f->passthrough) {
-		if (f->debugging)
+		if (f->logging)
 			log_packet(f->other_log, ip);
 		deliver(id, ip, tcp, f);
 		return 0;
@@ -427,27 +430,27 @@ static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
 
 	c = get_connection(ip, tcp, f);
 	if (!c) {
-		if (f->debugging)
+		if (f->logging)
 			log_packet(f->other_log, ip);
 		drop(id, f);
 		return 0;
 	}
 
 	if (is_from_peer(ip, f)) {
-		if (f->debugging)
+		if (f->logging)
 			log_packet(f->external_log, ip);
 		tcpr_filter_peer(c->tcpr.state, tcp, tcp_size);
 		internalize_destination(ip, tcp, f);
-		if (f->debugging)
+		if (f->logging)
 			log_packet(f->internal_log, ip);
 		deliver(id, ip, tcp, f);
 	} else {
-		if (f->debugging)
+		if (f->logging)
 			log_packet(f->internal_log, ip);
 		switch (tcpr_filter(c->tcpr.state, tcp, tcp_size)) {
 		case TCPR_DELIVER:
 			externalize_source(ip, tcp, f);
-			if (f->debugging)
+			if (f->logging)
 				log_packet(f->external_log, ip);
 			deliver(id, ip, tcp, f);
 			break;
@@ -550,7 +553,7 @@ static int start_log(const char *path, struct filter *f)
 
 static void setup_logging(struct filter *f)
 {
-	if (!f->debugging)
+	if (!f->logging)
 		return;
 	f->external_log = start_log(external_log_path, f);
 	f->internal_log = start_log(internal_log_path, f);
@@ -656,7 +659,7 @@ static void teardown_netfilter(struct filter *f)
 
 static void teardown_logging(struct filter *f)
 {
-	if (!f->debugging)
+	if (!f->logging)
 		return;
 	close(f->external_log);
 	close(f->internal_log);
