@@ -6,9 +6,9 @@ print_help() {
 	echo "Configure iptables for a TCPR application."
 	echo
 	echo "Options:"
-	echo "  -p PORT  Let the application bind to PORT."
-	echo "  -i HOST  Let the application bind to HOST."
-	echo "  -e HOST  Let the peer connect to HOST."
+	echo "  -i HOST  Internally, the application is bound to HOST."
+	echo "  -e HOST  Externally, the application is bound to HOST."
+	echo "  -a PORT  The application is bound to PORT."
 	echo "  -?       Print this help message and exit."
 	exit
 }
@@ -18,7 +18,7 @@ do
 	case "$1" in
 	-i) i="$2"; shift 2;;
 	-e) e="$2"; shift 2;;
-	-p) p="$2"; shift 2;;
+	-p) a="$2"; shift 2;;
 	-n) flush=":"; shift;;
 	*) print_help;;
 	esac
@@ -26,7 +26,7 @@ done
 
 : ${i:=127.0.0.2}
 : ${e:=127.0.0.1}
-: ${p:=8888}
+: ${a:=8888}
 : ${flush:=iptables -F}
 
 if test ! -e iptables.saved
@@ -35,5 +35,5 @@ then
 fi
 
 $flush
-iptables -A INPUT -d $e/32 -p tcp --dport $p -j NFQUEUE
-iptables -A OUTPUT -s $i/32 -p tcp --sport $p -j NFQUEUE
+iptables -A INPUT -d $e/32 -p tcp --dport $a -j NFQUEUE
+iptables -A OUTPUT -s $i/32 -p tcp --sport $a -j NFQUEUE
