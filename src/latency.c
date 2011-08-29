@@ -50,7 +50,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -C              Bypass checkpointed acknowledgments.\n");
 	fprintf(stderr, "  -T              Bypass TCPR.\n");
 	fprintf(stderr, "  -?              "
-		"Print this help message and exil.\n");
+		"Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
 
