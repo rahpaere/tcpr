@@ -23,10 +23,13 @@ int tcpr_setup_connection(struct tcpr_connection *c, struct sockaddr_in *peer,
 void tcpr_destroy_connection(struct sockaddr_in *peer, uint16_t port);
 void tcpr_teardown_connection(struct tcpr_connection *c);
 
-size_t tcpr_safe(struct tcpr_connection *c);
-void tcpr_advance(struct tcpr_connection *c, size_t bytes);
-int tcpr_consume(struct tcpr_connection *c, size_t bytes);
-int tcpr_done_reading(struct tcpr_connection *c);
-void tcpr_done_writing(struct tcpr_connection *c);
+size_t tcpr_output_bytes(struct tcpr_connection *c);
+size_t tcpr_input_bytes(struct tcpr_connection *c);
+void tcpr_checkpoint_output(struct tcpr_connection *c, size_t bytes);
+int tcpr_checkpoint_input(struct tcpr_connection *c, size_t bytes);
+void tcpr_shutdown_output(struct tcpr_connection *c);
+int tcpr_shutdown_input(struct tcpr_connection *c);
+int tcpr_close(struct tcpr_connection *c);
+void tcpr_wait(struct tcpr_connection *c);
 
 #endif

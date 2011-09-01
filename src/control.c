@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -47,10 +48,12 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -p PORT  The peer is bound to PORT.\n");
 	fprintf(stderr, "  -S FILE  Save the connection state into FILE.\n");
 	fprintf(stderr, "  -R FILE  Recover the connection state from FILE.\n");
-	fprintf(stderr, "  -I NUM   Acknowledge NUM bytes of input;\n"
-		"           if NUM is negative, shut down input.\n");
-	fprintf(stderr, "  -O NUM   Checkpoint NUM bytes of output;\n"
-		"           if NUM is negative, shut down output.\n");
+	fprintf(stderr, "  -I NUM   Acknowledge NUM bytes of input.\n");
+	fprintf(stderr, "  -I all   Acknowledge all outstanding input.\n");
+	fprintf(stderr, "  -I done  Shut down input.\n");
+	fprintf(stderr, "  -O NUM   Checkpoint NUM bytes of output.\n");
+	fprintf(stderr, "  -O all   Checkpoint all outstanding output.\n");
+	fprintf(stderr, "  -O done  Shut down output.\n");
 	fprintf(stderr, "  -W       Wait until the connection is done.\n");
 	fprintf(stderr, "  -D       Destroy the connection state.\n");
 	fprintf(stderr, "  -?       Print this help message and exit.\n");
@@ -89,10 +92,20 @@ static void handle_options(struct state *s, int argc, char **argv)
 			s->recovery_file = optarg;
 			break;
 		case 'I':
-			s->input_bytes = atoi(optarg);
+			if (!strcmp(optarg, "done"))
+				s->input_bytes = -1;
+			else if (!strcmp(optarg, "all"))
+				s->input_bytes = INT_MAX;
+			else
+				s->input_bytes = atoi(optarg);
 			break;
 		case 'O':
-			s->output_bytes = atoi(optarg);
+			if (!strcmp(optarg, "done"))
+				s->output_bytes = -1;
+			else if (!strcmp(optarg, "all"))
+				s->output_bytes = INT_MAX;
+			else
+				s->output_bytes = atoi(optarg);
 			break;
 		case 'W':
 			s->wait = 1;
@@ -146,6 +159,7 @@ static void setup_state(struct state *s)
 static void update_state(struct state *s)
 {
 	int fd;
+	size_t bytes;
 
 	if (s->recovery_file) {
 		fd = open(s->recovery_file, O_RDONLY);
@@ -166,54 +180,57 @@ static void update_state(struct state *s)
 		}
 	}
 
-	if (s->output_bytes < 0)
-		tcpr_done_writing(&s->tcpr);
-	else if (s->output_bytes > 0)
-		tcpr_advance(&s->tcpr, s->output_bytes);
-	if (s->input_bytes < 0)
-		tcpr_done_reading(&s->tcpr);
-	else if (s->input_bytes > 0)
-		tcpr_consume(&s->tcpr, s->input_bytes);
-}
+	if (s->output_bytes < 0) {
+		tcpr_shutdown_output(&s->tcpr);
+	} else if (s->output_bytes > 0) {
+		bytes = tcpr_output_bytes(&s->tcpr);
+		if ((size_t)s->output_bytes < bytes)
+			bytes = s->output_bytes;
+		tcpr_checkpoint_output(&s->tcpr, bytes);
+	}
 
-static void wait_until_done(struct state *s)
-{
-	while (!s->tcpr.state->done)
-		sleep(1);
+	if (s->input_bytes < 0) {
+		tcpr_shutdown_input(&s->tcpr);
+	} else if (s->input_bytes > 0) {
+		bytes = tcpr_input_bytes(&s->tcpr);
+		if ((size_t)s->input_bytes < bytes)
+			bytes = s->input_bytes;
+		tcpr_checkpoint_input(&s->tcpr, bytes);
+	}
 }
 
 static void print_state(struct state *s)
 {
-	printf("Saved ACK: %" PRIu32 "\n", ntohl(s->tcpr.state->saved.ack));
-	printf("Saved peer ACK: %" PRIu32 "\n",
+	printf("saved ACK\t%" PRIu32 "\n", ntohl(s->tcpr.state->saved.ack));
+	printf("saved peer ACK\t%" PRIu32 "\n",
 	       ntohl(s->tcpr.state->saved.safe));
 	if (s->tcpr.state->saved.peer.mss)
-		printf("Peer MSS: %" PRIu16 "\n",
+		printf("peer MSS\t%" PRIu16 "\n",
 		       s->tcpr.state->saved.peer.mss);
 	if (s->tcpr.state->saved.peer.ws)
-		printf("Peer WS: %" PRIu8 "\n",
+		printf("peer WS\t%" PRIu8 "\n",
 		       s->tcpr.state->saved.peer.ws - 1);
 	if (s->tcpr.state->saved.peer.sack_permitted)
-		printf("Peer SACK permitted.\n");
-	printf("Delta: %" PRIu32 "\n", s->tcpr.state->delta);
-	printf("ACK: %" PRIu32 "\n", ntohl(s->tcpr.state->ack));
+		printf("peer SACK permitted\n");
+	printf("delta\t%" PRIu32 "\n", s->tcpr.state->delta);
+	printf("ACK\t%" PRIu32 "\n", ntohl(s->tcpr.state->ack));
 	if (s->tcpr.state->have_fin)
-		printf("FIN: %" PRIu32 "\n", ntohl(s->tcpr.state->fin));
-	printf("SEQ: %" PRIu32 "\n", ntohl(s->tcpr.state->seq));
-	printf("WIN: %" PRIu16 "\n", ntohs(s->tcpr.state->win));
+		printf("FIN\t%" PRIu32 "\n", ntohl(s->tcpr.state->fin));
+	printf("SEQ\t%" PRIu32 "\n", ntohl(s->tcpr.state->seq));
+	printf("WIN\t%" PRIu16 "\n", ntohs(s->tcpr.state->win));
 	if (s->tcpr.state->peer.have_ack)
-		printf("Peer ACK: %" PRIu32 "\n",
+		printf("peer ACK\t%" PRIu32 "\n",
 		       ntohl(s->tcpr.state->peer.ack));
 	if (s->tcpr.state->peer.have_fin)
-		printf("Peer FIN: %" PRIu32 "\n",
+		printf("peer FIN\t%" PRIu32 "\n",
 		       ntohl(s->tcpr.state->peer.fin));
-	printf("Peer WIN: %" PRIu16 "\n", ntohs(s->tcpr.state->peer.win));
+	printf("peer WIN\t%" PRIu16 "\n", ntohs(s->tcpr.state->peer.win));
 	if (s->tcpr.state->saved.done_reading)
-		printf("The application is done reading.\n");
+		printf("done reading\n");
 	if (s->tcpr.state->saved.done_writing)
-		printf("The application is done writing.\n");
+		printf("done writing\n");
 	if (s->tcpr.state->done)
-		printf("The connection is finished.\n");
+		printf("closed\n");
 }
 
 static void teardown_state(struct state *s)
@@ -253,7 +270,7 @@ int main(int argc, char **argv)
 	setup_state(&s);
 	update_state(&s);
 	if (s.wait)
-		wait_until_done(&s);
+		tcpr_wait(&s.tcpr);
 	print_state(&s);
 	teardown_state(&s);
 

@@ -274,7 +274,7 @@ static void benchmark_receiving(struct throughput *t)
 	int count;
 
 	if (t->using_tcpr && !t->checkpointing)
-		tcpr_done_reading(&t->tcpr);
+		tcpr_shutdown_input(&t->tcpr);
 
 	for (count = 0; count < t->count; count++) {
 		total = 0;
@@ -288,7 +288,7 @@ static void benchmark_receiving(struct throughput *t)
 
 			total += bytes;
 			if (t->using_tcpr && t->checkpointing)
-				tcpr_consume(&t->tcpr, bytes);
+				tcpr_checkpoint_input(&t->tcpr, bytes);
 
 			gettimeofday(&end, NULL);
 		} while (bytes && (count + 1 == t->count || end.tv_sec < start.tv_sec + t->duration));
@@ -302,12 +302,10 @@ static void benchmark_receiving(struct throughput *t)
 static void teardown_connection(struct throughput *t)
 {
 	if (t->using_tcpr) {
-		tcpr_done_writing(&t->tcpr);
-		tcpr_done_reading(&t->tcpr);
+		tcpr_close(&t->tcpr);
 		if (shutdown(t->sock, SHUT_RDWR) < 0)
 			perror("Shutting down connection");
-		while (!t->tcpr.state->done)
-			sleep(1);
+		tcpr_wait(&t->tcpr);
 	}
 	if (close(t->sock) < 0)
 		perror("Closing connection");

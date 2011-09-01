@@ -273,7 +273,7 @@ static void benchmark(struct latency *l)
 	int count;
 
 	if (l->using_tcpr && !l->checkpointing)
-		tcpr_done_reading(&l->tcpr);
+		tcpr_shutdown_input(&l->tcpr);
 
 	for (count = 0; count < l->count; count++) {
 		total = 0;
@@ -291,7 +291,7 @@ static void benchmark(struct latency *l)
 				exit(EXIT_FAILURE);
 			}
 			if (l->using_tcpr && l->checkpointing)
-				tcpr_consume(&l->tcpr, sizeof(msg));
+				tcpr_checkpoint_input(&l->tcpr, sizeof(msg));
 
 			total++;
 			gettimeofday(&end, NULL);
@@ -306,12 +306,10 @@ static void benchmark(struct latency *l)
 static void teardown_connection(struct latency *l)
 {
 	if (l->using_tcpr) {
-		tcpr_done_writing(&l->tcpr);
-		tcpr_done_reading(&l->tcpr);
+		tcpr_close(&l->tcpr);
 		if (shutdown(l->sock, SHUT_RDWR) < 0)
 			perror("Shutting down connection");
-		while (!l->tcpr.state->done)
-			sleep(1);
+		tcpr_wait(&l->tcpr);
 	}
 	if (close(l->sock) < 0)
 		perror("Closing connection");

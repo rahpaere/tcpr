@@ -233,7 +233,7 @@ static void setup_connection(struct chat *c)
 			exit(EXIT_FAILURE);
 		}
 		if (!c->checkpointing)
-			tcpr_done_reading(&c->tcpr);
+			tcpr_shutdown_input(&c->tcpr);
 	}
 }
 
@@ -281,11 +281,11 @@ static void handle_close(struct flow *f, struct chat *c, struct epoll_event *e)
 	f->is_open = 0;
 	if (f == &c->flow_to_peer) {
 		if (!c->running_peer && c->using_tcpr)
-			tcpr_done_writing(&c->tcpr);
+			tcpr_shutdown_output(&c->tcpr);
 		shutdown(f->dst, SHUT_WR);
 	} else {
 		if (!c->running_peer && c->using_tcpr && c->checkpointing)
-			tcpr_done_reading(&c->tcpr);
+			tcpr_shutdown_input(&c->tcpr);
 		shutdown(f->src, SHUT_RD);
 	}
 	e->events = 0;
@@ -312,7 +312,7 @@ static void handle_input(struct flow *f, struct chat *c, struct epoll_event *e)
 	}
 
 	if (f == &c->flow_to_user && !c->running_peer && c->using_tcpr)
-		tcpr_consume(&c->tcpr, f->read);
+		tcpr_checkpoint_input(&c->tcpr, f->read);
 	e->events = 0;
 	if (epoll_ctl(c->epoll_fd, EPOLL_CTL_MOD, f->src, e) < 0) {
 		perror("Error disabling input event");
@@ -380,8 +380,7 @@ static void teardown_events(struct chat *c)
 static void teardown_connection(struct chat *c)
 {
 	if (!c->running_peer && c->using_tcpr) {
-		while (!c->tcpr.state->done)
-			sleep(1);
+		tcpr_wait(&c->tcpr);
 		tcpr_teardown_connection(&c->tcpr);
 	}
 	if (close(c->flow_to_peer.dst) < 0)

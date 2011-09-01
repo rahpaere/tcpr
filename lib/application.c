@@ -127,29 +127,46 @@ static int update(struct tcpr_connection *c)
 		      sizeof(c->control_address));
 }
 
-size_t tcpr_safe(struct tcpr_connection *c)
+size_t tcpr_output_bytes(struct tcpr_connection *c)
 {
 	return ntohl(c->state->peer.ack) - ntohl(c->state->saved.safe);
 }
 
-void tcpr_advance(struct tcpr_connection *c, size_t bytes)
+size_t tcpr_input_bytes(struct tcpr_connection *c)
+{
+	return ntohl(c->state->ack) - ntohl(c->state->saved.ack);
+}
+
+void tcpr_checkpoint_output(struct tcpr_connection *c, size_t bytes)
 {
 	c->state->saved.safe = htonl(ntohl(c->state->saved.safe) + bytes);
 }
 
-int tcpr_consume(struct tcpr_connection *c, size_t bytes)
+int tcpr_checkpoint_input(struct tcpr_connection *c, size_t bytes)
 {
 	c->state->saved.ack = htonl(ntohl(c->state->saved.ack) + bytes);
 	return update(c);
 }
 
-int tcpr_done_reading(struct tcpr_connection *c)
+void tcpr_shutdown_output(struct tcpr_connection *c)
+{
+	c->state->saved.done_writing = 1;
+}
+
+int tcpr_shutdown_input(struct tcpr_connection *c)
 {
 	c->state->saved.done_reading = 1;
 	return update(c);
 }
 
-void tcpr_done_writing(struct tcpr_connection *c)
+int tcpr_close(struct tcpr_connection *c)
 {
-	c->state->saved.done_writing = 1;
+	tcpr_shutdown_output(c);
+	return tcpr_shutdown_input(c);
+}
+
+void tcpr_wait(struct tcpr_connection *c)
+{
+	while (!c->state->done)
+		sleep(1);
 }

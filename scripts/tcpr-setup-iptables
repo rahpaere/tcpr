@@ -9,6 +9,7 @@ print_help() {
 	echo "  -i HOST  Internally, the application is bound to HOST."
 	echo "  -e HOST  Externally, the application is bound to HOST."
 	echo "  -a PORT  The application is bound to PORT."
+	echo "  -n       Do not flush the old rules."
 	echo "  -?       Print this help message and exit."
 	exit
 }
@@ -18,7 +19,7 @@ do
 	case "$1" in
 	-i) i="$2"; shift 2;;
 	-e) e="$2"; shift 2;;
-	-p) a="$2"; shift 2;;
+	-a) a="$2"; shift 2;;
 	-n) flush=":"; shift;;
 	*) print_help;;
 	esac
