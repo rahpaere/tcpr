@@ -201,36 +201,35 @@ static void update_state(struct state *s)
 
 static void print_state(struct state *s)
 {
-	printf("saved ACK\t%" PRIu32 "\n", ntohl(s->tcpr.state->saved.ack));
-	printf("saved peer ACK\t%" PRIu32 "\n",
-	       ntohl(s->tcpr.state->saved.safe));
-	if (s->tcpr.state->saved.peer.mss)
-		printf("peer MSS\t%" PRIu16 "\n",
-		       s->tcpr.state->saved.peer.mss);
-	if (s->tcpr.state->saved.peer.ws)
-		printf("peer WS\t%" PRIu8 "\n",
-		       s->tcpr.state->saved.peer.ws - 1);
-	if (s->tcpr.state->saved.peer.sack_permitted)
-		printf("peer SACK permitted\n");
-	printf("delta\t%" PRIu32 "\n", s->tcpr.state->delta);
-	printf("ACK\t%" PRIu32 "\n", ntohl(s->tcpr.state->ack));
-	if (s->tcpr.state->have_fin)
-		printf("FIN\t%" PRIu32 "\n", ntohl(s->tcpr.state->fin));
-	printf("SEQ\t%" PRIu32 "\n", ntohl(s->tcpr.state->seq));
-	printf("WIN\t%" PRIu16 "\n", ntohs(s->tcpr.state->win));
-	if (s->tcpr.state->peer.have_ack)
-		printf("peer ACK\t%" PRIu32 "\n",
-		       ntohl(s->tcpr.state->peer.ack));
-	if (s->tcpr.state->peer.have_fin)
-		printf("peer FIN\t%" PRIu32 "\n",
-		       ntohl(s->tcpr.state->peer.fin));
-	printf("peer WIN\t%" PRIu16 "\n", ntohs(s->tcpr.state->peer.win));
-	if (s->tcpr.state->saved.done_reading)
-		printf("done reading\n");
-	if (s->tcpr.state->saved.done_writing)
-		printf("done writing\n");
-	if (s->tcpr.state->done)
-		printf("closed\n");
+	struct tcpr *t = s->tcpr.state;
+
+	printf("%12zd  Outstanding input\n", tcpr_input_bytes(&s->tcpr));
+	printf("%12zd  Outstanding output\n", tcpr_output_bytes(&s->tcpr));
+	printf("%12" PRIu32 "  Checkpointed ACK\n", ntohl(t->saved.ack));
+	printf("%12" PRIu32 "  Checkpointed peer ACK\n", ntohl(t->saved.safe));
+	if (t->saved.peer.mss)
+		printf("%12" PRIu16 "  Peer MSS\n", t->saved.peer.mss);
+	if (t->saved.peer.ws)
+		printf("%12" PRIu8 "  Peer WS\n", t->saved.peer.ws - 1);
+	if (t->saved.peer.sack_permitted)
+		printf("              Peer SACK permitted\n");
+	if (t->saved.done_reading)
+		printf("              Done reading\n");
+	if (t->saved.done_writing)
+		printf("              Done writing\n");
+	if (t->done)
+		printf("              Closed\n");
+	printf("%12" PRIu32 "  Delta\n", t->delta);
+	printf("%12" PRIu32 "  ACK\n", ntohl(t->ack));
+	if (t->have_fin)
+		printf("%12" PRIu32 "  FIN\n", ntohl(t->fin));
+	printf("%12" PRIu32 "  SEQ\n", ntohl(t->seq));
+	printf("%12" PRIu16 "  WIN\n", ntohs(t->win));
+	if (t->peer.have_ack)
+		printf("%12" PRIu32 "  Peer ACK\n", ntohl(t->peer.ack));
+	if (t->peer.have_fin)
+		printf("%12" PRIu32 "  Peer FIN\n", ntohl(t->peer.fin));
+	printf("%12" PRIu16 "  Peer WIN\n", ntohs(t->peer.win));
 }
 
 static void teardown_state(struct state *s)
