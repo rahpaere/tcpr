@@ -214,8 +214,7 @@ static void setup_tcpr(struct latency *l)
 {
 	if (!l->using_tcpr)
 		return;
-	if (tcpr_setup_connection
-	    (&l->tcpr, &l->peer_address, l->address.sin_port, 0) < 0) {
+	if (tcpr_setup_connection(&l->tcpr, l->peer_address.sin_addr.s_addr, l->peer_address.sin_port, l->address.sin_port, 0) < 0) {
 		perror("Error setting up TCPR");
 		exit(EXIT_FAILURE);
 	}

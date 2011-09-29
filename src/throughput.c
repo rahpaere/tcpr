@@ -223,8 +223,7 @@ static void setup_tcpr(struct throughput *t)
 {
 	if (!t->using_tcpr)
 		return;
-	if (tcpr_setup_connection
-	    (&t->tcpr, &t->peer_address, t->address.sin_port, 0) < 0) {
+	if (tcpr_setup_connection(&t->tcpr, t->peer_address.sin_addr.s_addr, t->peer_address.sin_port, t->address.sin_port, 0) < 0) {
 		perror("Error setting up TCPR");
 		exit(EXIT_FAILURE);
 	}

@@ -67,47 +67,54 @@ static void setup_control_address(struct sockaddr_un *control_address,
 		ntohs(peer_port), ntohs(port));
 }
 
-int tcpr_setup_connection(struct tcpr_connection *c, struct sockaddr_in *peer,
-			  uint16_t port, int flags)
+int tcpr_setup_connection(struct tcpr_connection *c, uint32_t peer_address,
+			  uint16_t peer_port, uint16_t port, int flags)
 {
 	char host[INET_ADDRSTRLEN];
 
-	inet_ntop(AF_INET, &peer->sin_addr, host, sizeof(host));
+	inet_ntop(AF_INET, &peer_address, host, sizeof(host));
 
 	c->control_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
-	if (c->control_socket < 0)
+	if (c->control_socket < 0) {
+		c->state = NULL;
 		return -1;
+	}
 
-	setup_control_address(&c->control_address, host, peer->sin_port, port);
+	setup_control_address(&c->control_address, host, peer_port, port);
 	if (flags & TCPR_CONNECTION_FILTER) {
 		unlink(c->control_address.sun_path);
-		if (bind(c->control_socket, (struct sockaddr *)&c->control_address, sizeof(c->control_address)) < 0) {
+		if (bind
+		    (c->control_socket, (struct sockaddr *)&c->control_address,
+		     sizeof(c->control_address)) < 0) {
 			close(c->control_socket);
+			c->control_socket = -1;
+			c->state = NULL;
 			return -1;
 		}
 	}
 
-	c->state = open_state(host, peer->sin_port, port, flags);
+	c->state = open_state(host, peer_port, port, flags);
 	if (!c->state) {
-		close(c->control_socket);
 		if (flags & TCPR_CONNECTION_FILTER)
 			unlink(c->control_address.sun_path);
+		close(c->control_socket);
+		c->control_socket = -1;
 		return -1;
 	}
 
 	return 0;
 }
 
-void tcpr_destroy_connection(struct sockaddr_in *peer, uint16_t port)
+void tcpr_destroy_connection(uint32_t peer_address, uint16_t peer_port,
+			     uint16_t port)
 {
 	char host[INET_ADDRSTRLEN];
 	char state[sizeof(state_path_format) + sizeof(host) + 10];
 	char control[sizeof(control_path_format) + sizeof(host) + 10];
 
-	inet_ntop(AF_INET, &peer->sin_addr, host, sizeof(host));
-	sprintf(state, state_path_format, host, ntohs(peer->sin_port),
-		ntohs(port));
-	sprintf(control, control_path_format, host, ntohs(peer->sin_port),
+	inet_ntop(AF_INET, &peer_address, host, sizeof(host));
+	sprintf(state, state_path_format, host, ntohs(peer_port), ntohs(port));
+	sprintf(control, control_path_format, host, ntohs(peer_port),
 		ntohs(port));
 	unlink(state);
 	unlink(control);
@@ -115,8 +122,14 @@ void tcpr_destroy_connection(struct sockaddr_in *peer, uint16_t port)
 
 void tcpr_teardown_connection(struct tcpr_connection *c)
 {
-	munmap(c->state, sizeof(*c->state));
-	close(c->control_socket);
+	if (c->state) {
+		munmap(c->state, sizeof(*c->state));
+		c->state = NULL;
+	}
+	if (c->control_socket >= 0) {
+		close(c->control_socket);
+		c->control_socket = -1;
+	}
 }
 
 static int update(struct tcpr_connection *c)

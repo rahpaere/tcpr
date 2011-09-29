@@ -2,9 +2,6 @@
 #define TCPR_APPLICATION_H
 
 #include <tcpr/types.h>
-
-#include <netinet/in.h>
-#include <sys/socket.h>
 #include <sys/un.h>
 
 enum tcpr_connection_flags {
@@ -18,9 +15,10 @@ struct tcpr_connection {
 	struct tcpr *state;
 };
 
-int tcpr_setup_connection(struct tcpr_connection *c, struct sockaddr_in *peer,
-			  uint16_t port, int flags);
-void tcpr_destroy_connection(struct sockaddr_in *peer, uint16_t port);
+int tcpr_setup_connection(struct tcpr_connection *c, uint32_t peer_address,
+			  uint16_t peer_port, uint16_t port, int flags);
+void tcpr_destroy_connection(uint32_t peer_address, uint16_t peer_port,
+			     uint16_t port);
 void tcpr_teardown_connection(struct tcpr_connection *c);
 
 size_t tcpr_output_bytes(struct tcpr_connection *c);

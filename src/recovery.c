@@ -201,8 +201,7 @@ static void setup_tcpr(struct recovery *r)
 {
 	if (!r->using_tcpr)
 		return;
-	if (tcpr_setup_connection
-	    (&r->tcpr, &r->peer_address, r->address.sin_port, 0) < 0) {
+	if (tcpr_setup_connection(&r->tcpr, r->peer_address.sin_addr.s_addr, r->peer_address.sin_port, r->address.sin_port, 0) < 0) {
 		perror("Error setting up TCPR");
 		exit(EXIT_FAILURE);
 	}

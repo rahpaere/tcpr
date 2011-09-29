@@ -227,8 +227,7 @@ static void setup_connection(struct chat *c)
 	c->flow_to_peer.is_open = 1;
 
 	if (!c->running_peer && c->using_tcpr) {
-		if (tcpr_setup_connection
-		    (&c->tcpr, &c->peer_address, c->address.sin_port, 0) < 0) {
+		if (tcpr_setup_connection(&c->tcpr, c->peer_address.sin_addr.s_addr, c->peer_address.sin_port, c->address.sin_port, 0) < 0) {
 			perror("Opening state");
 			exit(EXIT_FAILURE);
 		}

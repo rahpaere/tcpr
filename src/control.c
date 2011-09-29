@@ -149,8 +149,7 @@ static void setup_state(struct state *s)
 
 	if (s->recovery_file)
 		flags |= TCPR_CONNECTION_CREATE;
-	if (tcpr_setup_connection
-	    (&s->tcpr, &s->peer_address, s->address.sin_port, flags) < 0) {
+	if (tcpr_setup_connection(&s->tcpr, s->peer_address.sin_addr.s_addr, s->peer_address.sin_port, s->address.sin_port, flags) < 0) {
 		perror("Opening state");
 		exit(EXIT_FAILURE);
 	}
@@ -257,7 +256,7 @@ static void teardown_state(struct state *s)
 
 	tcpr_teardown_connection(&s->tcpr);
 	if (s->destroy)
-		tcpr_destroy_connection(&s->peer_address, s->address.sin_port);
+		tcpr_destroy_connection(s->peer_address.sin_addr.s_addr, s->peer_address.sin_port, s->address.sin_port);
 }
 
 int main(int argc, char **argv)

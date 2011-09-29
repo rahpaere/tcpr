@@ -33,7 +33,8 @@ static const char other_log_path[] = "/var/tmp/tcpr-other.pcap";
 
 struct connection {
 	struct tcpr_connection tcpr;
-	struct sockaddr_in peer_address;
+	uint32_t peer_address;
+	uint16_t peer_port;
 	uint16_t port;
 };
 
@@ -285,7 +286,7 @@ static void reset(struct connection *c, struct filter *f)
 {
 	struct packet packet;
 	tcpr_reset(&packet.tcp, c->tcpr.state);
-	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
+	make_packet(&packet.ip, &packet.tcp, c->peer_address, f->internal_address, c->peer_port, c->port);
 	if (f->logging)
 		log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
@@ -295,7 +296,7 @@ static void recover(struct connection *c, struct filter *f)
 {
 	struct packet packet;
 	tcpr_recover(&packet.tcp, c->tcpr.state);
-	make_packet(&packet.ip, &packet.tcp, c->peer_address.sin_addr.s_addr, f->internal_address, c->peer_address.sin_port, c->port);
+	make_packet(&packet.ip, &packet.tcp, c->peer_address, f->internal_address, c->peer_port, c->port);
 	if (f->logging)
 		log_packet(f->internal_log, &packet.ip);
 	inject(&packet.ip, f);
@@ -305,7 +306,7 @@ static void update(struct connection *c, struct filter *f)
 {
 	struct packet packet;
 	tcpr_update(&packet.tcp, c->tcpr.state);
-	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address.sin_addr.s_addr, c->port, c->peer_address.sin_port);
+	make_packet(&packet.ip, &packet.tcp, f->external_address, c->peer_address, c->port, c->peer_port);
 	if (f->logging)
 		log_packet(f->external_log, &packet.ip);
 	inject(&packet.ip, f);
@@ -316,13 +317,13 @@ static int compare_connections(const void *a, const void *b)
 	const struct connection *c = a;
 	const struct connection *d = b;
 
-	if (c->peer_address.sin_addr.s_addr < d->peer_address.sin_addr.s_addr)
+	if (c->peer_address < d->peer_address)
 		return -1;
-	if (d->peer_address.sin_addr.s_addr < c->peer_address.sin_addr.s_addr)
+	if (d->peer_address < c->peer_address)
 		return 1;
-	if (c->peer_address.sin_port < d->peer_address.sin_port)
+	if (c->peer_port < d->peer_port)
 		return -1;
-	if (d->peer_address.sin_port < c->peer_address.sin_port)
+	if (d->peer_port < c->peer_port)
 		return 1;
 	if (c->port < d->port)
 		return -1;
@@ -349,14 +350,13 @@ static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
 	struct connection **node;
 	int flags;
 
-	key.peer_address.sin_family = AF_INET;
 	if (is_from_peer(ip, f)) {
-		key.peer_address.sin_addr.s_addr = ip->ip_src.s_addr;
-		key.peer_address.sin_port = tcp->th_sport;
+		key.peer_address = ip->ip_src.s_addr;
+		key.peer_port = tcp->th_sport;
 		key.port = tcp->th_dport;
 	} else {
-		key.peer_address.sin_addr.s_addr = ip->ip_dst.s_addr;
-		key.peer_address.sin_port = tcp->th_dport;
+		key.peer_address = ip->ip_dst.s_addr;
+		key.peer_port = tcp->th_dport;
 		key.port = tcp->th_sport;
 	}
 
@@ -367,15 +367,14 @@ static struct connection *get_connection(struct ip *ip, struct tcphdr *tcp,
 	c = malloc(sizeof(*c));
 	if (!c)
 		return NULL;
-	c->peer_address.sin_family = key.peer_address.sin_family;
-	c->peer_address.sin_addr.s_addr = key.peer_address.sin_addr.s_addr;
-	c->peer_address.sin_port = key.peer_address.sin_port;
+	c->peer_address = key.peer_address;
+	c->peer_port = key.peer_port;
 	c->port = key.port;
 
 	flags = TCPR_CONNECTION_FILTER;
 	if (!(tcp->th_flags & TH_ACK))
 		flags |= TCPR_CONNECTION_CREATE;
-	if (tcpr_setup_connection(&c->tcpr, &c->peer_address, c->port, flags) <
+	if (tcpr_setup_connection(&c->tcpr, c->peer_address, c->peer_port, c->port, flags) <
 	    0) {
 		free(c);
 		return NULL;
@@ -400,7 +399,7 @@ static void teardown_connection(struct connection *c, struct filter *f)
 {
 	tdelete(c, (void **)&f->connections, compare_connections);
 	tcpr_teardown_connection(&c->tcpr);
-	tcpr_destroy_connection(&c->peer_address, c->port);
+	tcpr_destroy_connection(c->peer_address, c->peer_port, c->port);
 }
 
 static int handle_packet(struct nfq_q_handle *q, struct nfgenmsg *m,
