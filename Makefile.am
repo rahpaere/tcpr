@@ -19,15 +19,11 @@ libtcpr_a_SOURCES = \
 	lib/application.c
 
 bin_PROGRAMS = \
+	tcpr-benchmark \
 	tcpr-chat \
 	tcpr-control \
-	tcpr-filter \
-	tcpr-benchmark-latency \
-	tcpr-benchmark-recovery \
-	tcpr-benchmark-throughput
+	tcpr-filter
+tcpr_benchmark_SOURCES = src/benchmark.c
 tcpr_chat_SOURCES = src/chat.c
 tcpr_control_SOURCES = src/control.c
 tcpr_filter_SOURCES = src/filter.c
-tcpr_benchmark_latency_SOURCES = src/latency.c
-tcpr_benchmark_recovery_SOURCES = src/recovery.c
-tcpr_benchmark_throughput_SOURCES = src/throughput.c

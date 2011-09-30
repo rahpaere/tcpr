@@ -8,7 +8,6 @@ print_help() {
 	echo "Options:"
 	echo "  -i HOST  Internally, the application is bound to HOST."
 	echo "  -e HOST  Externally, the application is bound to HOST."
-	echo "  -a PORT  The application is bound to PORT."
 	echo "  -n       Do not flush the old rules."
 	echo "  -?       Print this help message and exit."
 	exit
@@ -19,15 +18,13 @@ do
 	case "$1" in
 	-i) i="$2"; shift 2;;
 	-e) e="$2"; shift 2;;
-	-a) a="$2"; shift 2;;
 	-n) flush=":"; shift;;
 	*) print_help;;
 	esac
 done
 
-: ${i:=127.0.0.2}
-: ${e:=127.0.0.1}
-: ${a:=8888}
+: ${i:=10.0.1.1}
+: ${e:=10.0.0.1}
 : ${flush:=iptables -F}
 
 if test ! -e iptables.saved
@@ -36,5 +33,5 @@ then
 fi
 
 $flush
-iptables -A INPUT -d $e/32 -p tcp --dport $a -j NFQUEUE
-iptables -A OUTPUT -s $i/32 -p tcp --sport $a -j NFQUEUE
+iptables -A INPUT -d $e/32 -j NFQUEUE
+iptables -A OUTPUT -s $i/32 -j NFQUEUE

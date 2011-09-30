@@ -1,9 +1,8 @@
-The TCPR home page, <http://www.cs.cornell.edu/~burgess/tcpr/>, includes
-information about the people involved in the project, links to the code,
-and a copy of the research paper, which provides in-depth information
-about TCPR's design.  This README provides a practical introduction to
-guide someone new to the project from first cloning the code repository
-through running the automated tests and conducting a live demonstration.
+The TCPR home page, <http://www.cs.cornell.edu/~burgess/tcpr/>, provides
+information about the people involved in the project, the code development
+repository, and TCPR's design and ongoing research.  This document aims
+to guide someone new to the project from first cloning the code repository
+through conducting a live demonstration and developing new applications.
 
 TCPR uses the GNU autotools build system.  However, the repository does
 not contain any generated files, so once, right after cloning, you must
@@ -20,7 +19,7 @@ machine with:
 The following examples also assume you have some common system
 administration utilities installed:
 
-  # apt-get install iptables iproute openvpn
+  # apt-get install iptables iproute
 
 Finally, the following are often useful for testing and debugging:
 
@@ -32,49 +31,37 @@ Once the dependencies are installed, build the project.
   $ cd tcpr-build
   $ ../tcpr/configure && make
 
-Two programs result: tcpr-filter, the packet filter, and tcpr-chat,
-the demonstration program.  In order to run, tcpr-filter requires some
-special privileges.
+The packet filter program, `tcpr-filter', requires some special privileges
+to run.
 
   # setcap cap_net_admin,cap_net_raw,cap_sys_nice+eip tcpr-filter
 
-Whenever you rebuild tcpr-filter, the overwitten file will lose its
+Whenever you rebuild tcpr-filter, the overwritten file will lose its
 capabilities and you will need to set them again.  However, you will be
 able to run the filter as an unprivileged user.
 
+The `tcpr-chat' program can run as an application or its peer,
+with either endpoint initiating the connection.  Both endpoints
+pipe their standard input and output through the network connection.
 
-The tcpr-chat program can perform as either client or server, and
-orthogonally as either fault-tolerant application or legacy peer.
-For a working example, assume you will conduct a demonstration using
-the loopback address on a single machine.  The application must bind
-to a distinct internal address, which the filter will rewrite into an
-externally visible one for the peer, so give your loopback device another
-arbitrary address to use internally.
+There is a `tcpr-setup-iptables' script to install rules in the firewall
+to filter the connection through `tcpr-filter'; the defaults use IP
+addresses intended to be unique to make matching easy, which you will
+have to add to your loopback device.
 
-  # ip addr add dev lo 127.0.0.2/32
-
-Now it is necessary to configure the Linux builtin firewall, Netfilter,
-to capture the appropriate packets and send them to userspace for
-the filter.  The tcpr-setup-iptables script is installed to make such
-configuration easy.
+  # ip addr add dev lo 10.0.1.1/32
+  # ip addr add dev lo 10.0.0.1/32
+  # ip addr add dev lo 10.0.0.2/32
 
   # tcpr-setup-iptables
 
-The previously-installed firewall rules are removed, but saved in a file
-in the working directory.  To clean up when finished, remove the extra
-address and restore the firewall.
-
-  # ip addr del dev lo 127.0.0.2/32
-  # tcpr-restore-iptables
-
-Now run the filter.  The default internal and external addresses are
-configured for the demonstration, so no arguments are necessary.
+Now run the filter.
 
   $ tcpr-filter
 
 In its own terminal, run the peer as a server.
 
-  $ tcpr-chat -p
+  $ tcpr-chat -P
 
 In yet another terminal, run the application as a client.
 
@@ -91,107 +78,38 @@ both and recover them simultaneously.  When you are finished at either
 endpoint, type control-D.  When both ends have finished, they will exit.
 Finally, kill the filter.
 
-To get a closer look at what is happening, or to debug a problem, you
-can run the filter with the `-d' option, which causes it to dump packet
-traces from both internal and external perspectives, along with per-packet
-snapshots of its internal state for the connection.  It can also be useful
-to set up another terminal to watch the state various connections are in.
+The setup script replaces the firewall's original configuration, but
+saves it in a file in the working directory.  To clean up when you are
+finished, remove the extra address and restore the firewall.
 
-  $ watch 'netstat -n | grep 127\\.'
+  # ip addr del dev lo 10.0.1.1/32
+  # ip addr del dev lo 10.0.0.1/32
+  # ip addr del dev lo 10.0.0.2/32
 
-If the application crashes but you move on to something else without
-recovering and closing gracefully, its old might confuse the application
-into recovering when you mean to establish a fresh connection.  Find the
-relevant files in /var/tmp and delete and then start over.
+  # tcpr-restore-iptables
 
-  $ rm -f /var/tmp/tcpr-127.0.0.1-9999-8888.state
-  $ rm -f /var/tmp/tcpr-127.0.0.1-9999-8888.ctl
+To get a closer look at what is happening during a demonstration,
+or to debug a problem, you can run the filter with the `-l' option,
+which causes it to dump packet traces from both internal and external
+perspectives.  It can also be useful to set up another terminal to
+watch the state various connections are in.
+
+  $ watch 'netstat -n | grep 10\\.'
+
+Another useful utility is `tcpr-control', which prints out a
+human-readable representation of TCPR's state for the connection, and can
+also be used to manipulate state on behalf of a broken or non-TCPR-aware
+application.  If the application crashes but you move on to something
+else without recovering and closing gracefully, its old state might
+confuse the application into recovering when you mean to establish a
+fresh connection; you can remove it with `tcpr-control -D'.
+
+The final program is `tcpr-benchmark', which connects to a peer's echo
+service and deliberately fails and recovers many connections in order
+to benchmark recovery time.  Other benchmarks, such as throughput and
+latency, can be measured using `tcpr-chat' and inspecting packet traces
+using Wireshark.
 
 To write new applications, look through `src/chat.c' in detail.  It is
 useful not only for demonstrating the system to others, but also for
 demonstrating by example how to write a TCPR-aware application.
-
-
-Whereas the demonstration program uses the operating system's actual
-network stack, the automated tests employ a tunnel device in order
-to appear to be an entire network of separate machines, injecting
-manually-constructed packets to simulate various situations and run the
-filter through its paces.  To be able to run the automated tests as an
-unprivileged user, create a tunnel device with the appropriate ownership.
-
-  # openvpn --mktun --dev tcpr-test --dev-type tun --user USERNAME
-
-Then, give it a network of addresses and establish the filter rules.
-
-  # ip link set tcpr-test up
-  # ip addr add 10.10.10.1/24 dev tcpr-test
-  # iptables -A FORWARD -s 10.10.10.1/24 -j NFQUEUE
-
-Finally, configure the kernel to route packets and not complain about
-the inefficient routing being simulated.
-
-  # echo 0 | tee /proc/sys/net/ipv4/conf/*/send_redirects > /dev/null
-  # echo 1 | tee /proc/sys/net/ipv4/ip_forward > /dev/null
-
-Now run the filter.
-
-  $ tcpr-filter -i 10.10.10.4 -e 10.10.10.3
-
-In another terminal, build and run the tests:
-
-  $ make check
-
-Each invocation will create packet traces, not unlike those the filter
-leaves with the `-d' option, to aid in debugging should something fail.
-
-The tests clean up after themselves, so the suite can be run multiple
-times without restarting the filter.  When you are finished, kill
-the filter.  To clean up, remove the tunnel device and filter rules:
-
-  # openvpn --rmtun --dev tcpr-test --dev-type tun
-  # iptables -D FORWARD -s 10.10.10.1/24 -j NFQUEUE
-
-
-Finally, the distribution includes a patch that adds basic TCPR support to
-netperf, a network performance testing tool.  To benchmark TCPR, set up two
-machines, or, for the sake of exposition, reuse the setup from the loopback
-demonstration.  On the peer machine, launch the server side.
-
-  # netserver
-
-On the application machine, launch the filter.
-
-  # tcpr-filter
-
-In another terminal on the application machine, launch the application,
-that is, the netperf test.  It will communicate with the peer directly
-to establish a control connection, then switch to using its internal
-address for the data connection in order to flow through the filter.
-
-  $ netperf -H 127.0.0.1 -t TCP_STREAM -- -L 127.0.0.2
-
-The TCP_STREAM test measures throughput with the application sending
-data to the peer.  To measure throughput in the reverse direction,
-use the TCP_MAERTS test.  To measure application-level round trips,
-use the TCP_RR test.  Explore netperf's help to learn about its helpful
-options; notably, you might want to change the test duration with `-l',
-or set buffer sizes to match the properties of the link over which you
-conduct the benchmarks.
-
-To disable checkpointing but still send (useless) updates, pass netperf
-the `-c' option at the end.  To additionally stop sending updates, provide
-the `-u' option as well.  To fall back on the original, TCPR-oblivious
-behavior, just pass the `-T' option at the end.  In the last case,
-either test a connection that bypasses the filter (to test raw TCP),
-or send it through the filter but pass `-p' to tcpr-filter so that it
-passes packets through unchanged.
-
-If you crash netperf or abort in the middle and notice (perhaps with
-`netstat') that old connections are sitting around, kill netperf and the
-filter, restart netserver, and wait for the connections to time out and
-go away.  Then restart the filter and try again from scratch.
-
-Per-packet microbenchmarks can be generated by running an example
-connection, perhaps with tcpr-chat, through the filter with the `-d'
-option.  The timestamps in the packet traces can be used to determine
-processing latency in whatever situations you benchmark.

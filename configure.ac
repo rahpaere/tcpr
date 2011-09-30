@@ -14,6 +14,8 @@ AC_SEARCH_LIBS([nfnl_send], [nfnetlink],,
 		AC_MSG_ERROR([The nfnetlink library is required.]))
 AC_SEARCH_LIBS([nfq_open], [netfilter_queue],,
 		AC_MSG_ERROR([The netfilter_queue library is required.]))
+AC_SEARCH_LIBS([clock_gettime], [rt],,
+		AC_MSG_ERROR([The clock_gettime function is required.]))
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
