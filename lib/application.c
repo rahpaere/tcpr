@@ -178,6 +178,12 @@ int tcpr_close(struct tcpr_connection *c)
 	return tcpr_shutdown_input(c);
 }
 
+int tcpr_kill(struct tcpr_connection *c)
+{
+	c->state->have_fin = 1;
+	return update(c);
+}
+
 void tcpr_wait(struct tcpr_connection *c)
 {
 	while (!c->state->done)

@@ -40,18 +40,10 @@ Whenever you rebuild tcpr-filter, the overwritten file will lose its
 capabilities and you will need to set them again.  However, you will be
 able to run the filter as an unprivileged user.
 
-The `tcpr-chat' program can run as an application or its peer,
-with either endpoint initiating the connection.  Both endpoints
-pipe their standard input and output through the network connection.
-
-There is a `tcpr-setup-iptables' script to install rules in the firewall
-to filter the connection through `tcpr-filter'; the defaults use IP
-addresses intended to be unique to make matching easy, which you will
-have to add to your loopback device.
-
-  # ip addr add dev lo 10.0.1.1/32
-  # ip addr add dev lo 10.0.0.1/32
-  # ip addr add dev lo 10.0.0.2/32
+The `tcpr-chat' program can run as an application or its peer, with either
+endpoint initiating the connection.  Both endpoints pipe their standard
+input and output through the network connection.  The distribution
+includes a script to install appropriate rules in the firewall.
 
   # tcpr-setup-iptables
 
@@ -78,13 +70,9 @@ both and recover them simultaneously.  When you are finished at either
 endpoint, type control-D.  When both ends have finished, they will exit.
 Finally, kill the filter.
 
-The setup script replaces the firewall's original configuration, but
-saves it in a file in the working directory.  To clean up when you are
-finished, remove the extra address and restore the firewall.
-
-  # ip addr del dev lo 10.0.1.1/32
-  # ip addr del dev lo 10.0.0.1/32
-  # ip addr del dev lo 10.0.0.2/32
+The setup script has replaced the firewall's original configuration,
+but saved it in a file in the working directory.  To clean up when you
+are finished, there is a script to restore the firewall.
 
   # tcpr-restore-iptables
 
@@ -92,9 +80,7 @@ To get a closer look at what is happening during a demonstration,
 or to debug a problem, you can run the filter with the `-l' option,
 which causes it to dump packet traces from both internal and external
 perspectives.  It can also be useful to set up another terminal to
-watch the state various connections are in.
-
-  $ watch 'netstat -n | grep 10\\.'
+watch the state various connections are in with `netstat'.
 
 Another useful utility is `tcpr-control', which prints out a
 human-readable representation of TCPR's state for the connection, and can

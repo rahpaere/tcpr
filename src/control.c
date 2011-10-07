@@ -8,13 +8,14 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-static const char *peer_host = "10.0.0.2";
+static const char *peer_host = "127.0.0.1";
 static const char *peer_port = "9999";
 static const char *port = "8888";
 static const char *save_file;
 static const char *recovery_file;
 static int input_bytes;
 static int output_bytes;
+static int kill;
 static int wait;
 static int destroy;
 static struct sockaddr_in peer_address;
@@ -39,6 +40,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -O NUM   Checkpoint NUM bytes of output.\n");
 	fprintf(stderr, "  -O all   Checkpoint all outstanding output.\n");
 	fprintf(stderr, "  -O done  Shut down output.\n");
+	fprintf(stderr, "  -K       Kill the application's connection.\n");
 	fprintf(stderr, "  -W       Wait until the connection is done.\n");
 	fprintf(stderr, "  -D       Destroy the connection state.\n");
 	fprintf(stderr, "  -?       Print this help message and exit.\n");
@@ -48,7 +50,7 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "a:h:p:S:R:I:O:WD?")) {
+		switch (getopt(argc, argv, "a:h:p:S:R:I:O:KWD?")) {
 		case 'a':
 			port = optarg;
 			break;
@@ -79,6 +81,9 @@ static void handle_options(int argc, char **argv)
 				output_bytes = INT_MAX;
 			else
 				output_bytes = atoi(optarg);
+			break;
+		case 'K':
+			kill = 1;
 			break;
 		case 'W':
 			wait = 1;
@@ -171,6 +176,9 @@ static void update(void)
 			bytes = input_bytes;
 		tcpr_checkpoint_input(&tcpr, bytes);
 	}
+
+	if (kill)
+		tcpr_kill(&tcpr);
 }
 
 static void print(void)
@@ -191,11 +199,13 @@ static void print(void)
 		printf("              Done reading\n");
 	if (t->saved.done_writing)
 		printf("              Done writing\n");
+	else if (t->have_fin)
+		printf("              Crashed\n");
 	if (t->done)
 		printf("              Closed\n");
 	printf("%12" PRIu32 "  Delta\n", t->delta);
 	printf("%12" PRIu32 "  ACK\n", ntohl(t->ack));
-	if (t->have_fin)
+	if (t->have_fin && t->saved.done_writing)
 		printf("%12" PRIu32 "  FIN\n", ntohl(t->fin));
 	printf("%12" PRIu32 "  SEQ\n", ntohl(t->seq));
 	printf("%12" PRIu16 "  WIN\n", ntohs(t->win));

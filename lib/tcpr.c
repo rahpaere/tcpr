@@ -44,8 +44,6 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 		  h->th_off * 4);
 
 	if (h->th_flags & TH_FIN) {
-		if (!t->saved.done_writing)
-			return TCPR_RESET;
 		t->fin = htonl(ntohl(t->seq) + 1 - t->delta);
 		t->have_fin = 1;
 	}
@@ -58,9 +56,13 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 		} else {
 			t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
 			t->saved.done_writing = 0;
+			t->have_fin = 0;
 			return TCPR_RECOVER;
 		}
 	}
+
+	if (t->have_fin && !t->saved.done_writing)
+		return TCPR_RESET;
 
 	t->ack = h->th_ack;
 	if (t->saved.done_reading) {
@@ -91,7 +93,7 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 	uint8_t *end = (uint8_t *)((uint32_t *)h + h->th_off);
 	uint8_t *opt = (uint8_t *)(h + 1);
 	uint8_t *tmp;
-	uint32_t *sack;
+	uint32_t sack;
 
 	while (opt < end && *opt != TCPOPT_EOL)
 		switch (*opt) {
@@ -111,10 +113,18 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 			opt += opt[1];
 			break;
 		case TCPOPT_SACK:
-			for (sack = (uint32_t *)opt + 2;
-			     sack < (uint32_t *)opt + opt[1]; sack++)
-				*sack = htonl(ntohl(*sack) + t->delta);
-			opt += opt[1];
+			tmp = opt + opt[1];
+			for (opt += 2; opt < tmp; opt += 4) {
+				sack = (uint32_t)opt[0] << 24
+					| (uint32_t)opt[1] << 16
+					| (uint32_t)opt[2] << 8
+					| (uint32_t)opt[3];
+				sack += t->delta;
+				opt[0] = sack >> 24;
+				opt[1] = sack >> 16;
+				opt[2] = sack >> 8;
+				opt[3] = sack;
+			}
 			break;
 		case TCPOPT_MD5:
 		case TCPOPT_TIMESTAMP:

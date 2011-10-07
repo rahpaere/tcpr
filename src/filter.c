@@ -38,8 +38,8 @@ struct packet {
 static int external_log;
 static int internal_log;
 static int other_log;
-static char *external_host = "10.0.0.1";
-static char *internal_host = "10.0.1.1";
+static char *external_host = "127.0.0.2";
+static char *internal_host = "127.0.0.3";
 static int logging;
 static int epoll_fd;
 static int netfilter_fd;
@@ -273,11 +273,21 @@ static void reset(struct connection *c)
 static void recover(struct connection *c)
 {
 	struct packet packet;
+	int i;
+
 	tcpr_recover(&packet.tcp, c->tcpr.state);
 	make_packet(&packet.ip, &packet.tcp, c->peer_address, internal_address, c->peer_port, c->port);
 	if (logging)
 		log_packet(internal_log, &packet.ip);
 	inject(&packet.ip);
+
+	tcpr_update(&packet.tcp, c->tcpr.state);
+	make_packet(&packet.ip, &packet.tcp, external_address, c->peer_address, c->port, c->peer_port);
+	for (i = 0; i < 4; i++) {
+		if (logging)
+			log_packet(external_log, &packet.ip);
+		inject(&packet.ip);
+	}
 }
 
 static void update(struct connection *c)
@@ -587,9 +597,13 @@ static void handle_event(struct epoll_event *e)
 	} else {
 		struct connection *c = e->data.ptr;
 		size = read(c->tcpr.control_socket, data, sizeof(data));
-		update(c);
 		if (c->tcpr.state->done)
 			teardown_connection(c);
+		else if (c->tcpr.state->have_fin
+					&& !c->tcpr.state->saved.done_writing)
+			reset(c);
+		else
+			update(c);
 	}
 }
 

@@ -8,9 +8,9 @@
 #include <sys/select.h>
 #include <unistd.h>
 
-static const char *internal_host = "10.0.1.1";
-static const char *external_host = "10.0.0.1";
-static const char *peer_host = "10.0.0.2";
+static const char *internal_host = "127.0.0.3";
+static const char *external_host = "127.0.0.2";
+static const char *peer_host = "127.0.0.1";
 static const char *peer_port = "9999";
 static const char *port = "8888";
 

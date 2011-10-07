@@ -28,6 +28,7 @@ int tcpr_checkpoint_input(struct tcpr_connection *c, size_t bytes);
 void tcpr_shutdown_output(struct tcpr_connection *c);
 int tcpr_shutdown_input(struct tcpr_connection *c);
 int tcpr_close(struct tcpr_connection *c);
+int tcpr_kill(struct tcpr_connection *c);
 void tcpr_wait(struct tcpr_connection *c);
 
 #endif
