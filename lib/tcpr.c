@@ -38,6 +38,12 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 	if (h->th_flags & TH_RST)
 		return TCPR_DROP;
 
+	if (t->saved.external_port) {
+		sum += (uint16_t)~h->th_sport;
+		h->th_sport = t->saved.external_port;
+		sum += h->th_sport;
+	}
+
 	t->win = h->th_win;
 	t->seq =
 	    htonl(ntohl(h->th_seq) + ((h->th_flags & TH_SYN) ? 1 : 0) + size -
@@ -52,6 +58,12 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 		if (h->th_flags & TH_ACK) {
 			t->saved.safe = htonl(ntohl(h->th_seq) + 1);
 		} else if (!t->peer.have_ack) {
+			t->saved.internal_port = h->th_sport;
+			if (!t->saved.external_port)
+				t->saved.external_port = h->th_sport;
+			t->saved.peer.port = h->th_dport;
+			if (h->th_sum)
+				h->th_sum = ~shorten(shorten(sum));
 			return TCPR_DELIVER;
 		} else {
 			t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
@@ -137,9 +149,18 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 			break;
 		}
 
+	if (t->saved.internal_port) {
+		sum += (uint16_t)~h->th_dport;
+		h->th_dport = t->saved.internal_port;
+		sum += h->th_dport;
+	}
+
 	t->peer.win = h->th_win;
 
 	if (h->th_flags & TH_SYN) {
+		t->saved.internal_port = h->th_dport;
+		t->saved.external_port = h->th_dport;
+		t->saved.peer.port = h->th_sport;
 		t->saved.ack = htonl(ntohl(h->th_seq) + 1);
 		if (h->th_flags & TH_ACK)
 			t->saved.safe = h->th_ack;
@@ -163,10 +184,10 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 		sum += shorten(~h->th_ack);
 		h->th_ack = htonl(ntohl(h->th_ack) + t->delta);
 		sum += shorten(h->th_ack);
-
-		if (h->th_sum)
-			h->th_sum = ~shorten(shorten(sum));
 	}
+
+	if (h->th_sum)
+		h->th_sum = ~shorten(shorten(sum));
 }
 
 void tcpr_recover(struct tcphdr *h, struct tcpr *t)
@@ -174,6 +195,8 @@ void tcpr_recover(struct tcphdr *h, struct tcpr *t)
 	uint8_t *opt = (uint8_t *)(h + 1);
 	size_t i = 0;
 
+	h->th_sport = t->saved.peer.port;
+	h->th_dport = t->saved.internal_port;
 	h->th_seq = htonl(ntohl(t->saved.ack) - 1);
 	h->th_ack = t->seq;
 	h->th_off = sizeof(*h) / 4;
@@ -215,6 +238,8 @@ void tcpr_update(struct tcphdr *h, struct tcpr *t)
 			t->done = 1;
 	}
 
+	h->th_sport = t->saved.external_port;
+	h->th_dport = t->saved.peer.port;
 	h->th_seq = htonl(ntohl(t->seq) - t->delta);
 	h->th_ack = t->saved.ack;
 	h->th_off = sizeof(*h) / 4;
@@ -227,6 +252,8 @@ void tcpr_update(struct tcphdr *h, struct tcpr *t)
 
 void tcpr_reset(struct tcphdr *h, struct tcpr *t)
 {
+	h->th_sport = t->saved.peer.port;
+	h->th_dport = t->saved.internal_port;
 	h->th_seq = t->ack;
 	h->th_ack = 0;
 	h->th_off = sizeof(*h) / 4;

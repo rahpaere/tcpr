@@ -4,9 +4,12 @@
 #include <stdint.h>
 
 struct tcpr_saved {
+	uint16_t internal_port;
+	uint16_t external_port;
 	uint32_t ack;
 	uint32_t safe;
 	struct {
+		uint16_t port;
 		uint16_t mss;
 		uint8_t ws;
 		uint8_t sack_permitted;

@@ -185,6 +185,15 @@ static void print(void)
 {
 	struct tcpr *t = tcpr.state;
 
+	if (t->saved.external_port)
+		printf("%12" PRIu16 "  External port\n",
+			ntohs(t->saved.external_port));
+	if (t->saved.internal_port)
+		printf("%12" PRIu16 "  Internal port\n",
+			ntohs(t->saved.internal_port));
+	if (t->saved.peer.port)
+		printf("%12" PRIu16 "  Peer port\n",
+			ntohs(t->saved.peer.port));
 	printf("%12zd  Outstanding input\n", tcpr_input_bytes(&tcpr));
 	printf("%12zd  Outstanding output\n", tcpr_output_bytes(&tcpr));
 	printf("%12" PRIu32 "  Checkpointed ACK\n", ntohl(t->saved.ack));
