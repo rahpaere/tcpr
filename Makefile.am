@@ -27,3 +27,9 @@ tcpr_benchmark_SOURCES = src/benchmark.c
 tcpr_chat_SOURCES = src/chat.c
 tcpr_control_SOURCES = src/control.c
 tcpr_filter_SOURCES = src/filter.c
+
+noinst_PROGRAMS = \
+	examples/client \
+	examples/server
+examples_client_SOURCES = examples/client.c
+examples_server_SOURCES = examples/server.c

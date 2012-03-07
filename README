@@ -96,6 +96,7 @@ to benchmark recovery time.  Other benchmarks, such as throughput and
 latency, can be measured using `tcpr-chat' and inspecting packet traces
 using Wireshark.
 
-To write new applications, look through `src/chat.c' in detail.  It is
-useful not only for demonstrating the system to others, but also for
-demonstrating by example how to write a TCPR-aware application.
+The `examples' subdirectory contains some very simple programs to
+demonstrate the use of TCPR.  The `tcpr-chat' program is another,
+slightly larger, example.  Both are useful for learning to write your
+own applications using TCPR.
