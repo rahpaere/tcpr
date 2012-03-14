@@ -20,10 +20,12 @@ libtcpr_a_SOURCES = \
 
 bin_PROGRAMS = \
 	tcpr-benchmark \
+	tcpr-bridge \
 	tcpr-chat \
 	tcpr-control \
 	tcpr-filter
 tcpr_benchmark_SOURCES = src/benchmark.c
+tcpr_bridge_SOURCES = src/bridge.c
 tcpr_chat_SOURCES = src/chat.c
 tcpr_control_SOURCES = src/control.c
 tcpr_filter_SOURCES = src/filter.c
