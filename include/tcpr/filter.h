@@ -3,8 +3,10 @@
 
 #include <tcpr/types.h>
 
+#ifndef __KERNEL__
 #include <netinet/tcp.h>
 #include <stdlib.h>
+#endif
 
 #ifndef TCPOPT_MD5
 #define TCPOPT_MD5 19

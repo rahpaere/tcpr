@@ -1,7 +1,9 @@
 #ifndef TCPR_TYPES_H
 #define TCPR_TYPES_H
 
+#ifndef __KERNEL__
 #include <stdint.h>
+#endif
 
 struct tcpr_saved {
 	uint16_t internal_port;
