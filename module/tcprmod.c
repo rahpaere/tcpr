@@ -252,6 +252,6 @@ void tcpr_reset(struct tcphdr *h, struct tcpr *t)
 	h->dest = t->saved.internal_port;
 	h->seq = t->ack;
 	h->doff = sizeof(*h) / 4;
-	h->rst = 0;
+	h->rst = 1;
 	h->window = t->peer.win;
 }

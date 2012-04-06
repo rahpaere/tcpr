@@ -117,14 +117,39 @@ static void connection_close(struct connection *c)
 static int inject(struct sk_buff *skb)
 {
 	struct iphdr *ip = ip_hdr(skb);
+	struct tcphdr *tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
 	struct rtable *rt;
+	int ret;
+	int len;
 
-	rt = ip_route_output(current->nsproxy->net_ns, ip->saddr, ip->daddr,
+	len = ntohs(ip->tot_len) - ip->ihl * 4;
+	ip->check = 0;
+	tcp->check = 0;
+	printk(KERN_DEBUG "inject, len = %d - %d = %d\n", ntohs(ip->tot_len), ip->ihl * 4, len);
+	tcp->check = csum_tcpudp_magic(ip->saddr, ip->daddr, len, ip->protocol,
+				       csum_partial(tcp, len, 0));
+	printk(KERN_DEBUG "tcp->check = %hx\n", tcp->check);
+	ip->check = ip_fast_csum(ip, ip->ihl);
+	skb->ip_summed = CHECKSUM_NONE;
+	printk(KERN_DEBUG "ip->check = %hx\n", ip->check);
+
+	rt = ip_route_output(&init_net, ip->saddr, ip->daddr,
 			     RT_TOS(ip->tos), 0);
 	if (IS_ERR(rt))
 		return -1;
+	printk(KERN_DEBUG "routed!\n");
+
 	skb_dst_set(skb, &rt->dst);
-	return skb_dst(skb)->output(skb);
+	skb->dev = rt->dst.dev;
+	skb->protocol = htons(ETH_P_IP);
+	printk(KERN_DEBUG "about to dst_output\n");
+	ret = dst_output(skb);
+	return 0;
+	if (ret) {
+		printk(KERN_DEBUG "dst_output failed\n");
+		return ret;
+	}
+	return 0;
 }
 
 static void update(struct connection *c)
@@ -137,19 +162,14 @@ static void update(struct connection *c)
 	if (skb == NULL)
 		return;
 
-	skb->ip_summed = CHECKSUM_NONE;
 	skb_reserve(skb, LL_MAX_HEADER);
 	skb_reset_network_header(skb);
 	skb_put(skb, 60);
 
 	ip = ip_hdr(skb);
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-
-	tcpr_update(tcp, &c->tcpr);
 	ip->ihl = sizeof(*ip) / 4;
 	ip->version = 4;
 	ip->tos = 0;
-	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
 	ip->id = 0;
 	ip->frag_off = 0;
 	ip->ttl = 64;
@@ -157,6 +177,11 @@ static void update(struct connection *c)
 	ip->check = 0;
 	ip->saddr = c->address;
 	ip->daddr = c->peer_address;
+
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+	tcpr_update(tcp, &c->tcpr);
+
+	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
 	inject(skb);
 }
 
@@ -170,19 +195,14 @@ static void reset(struct connection *c)
 	if (skb == NULL)
 		return;
 
-	skb->ip_summed = CHECKSUM_NONE;
 	skb_reserve(skb, LL_MAX_HEADER);
 	skb_reset_network_header(skb);
 	skb_put(skb, 60);
 
 	ip = ip_hdr(skb);
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-
-	tcpr_reset(tcp, &c->tcpr);
 	ip->ihl = sizeof(*ip) / 4;
 	ip->version = 4;
 	ip->tos = 0;
-	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
 	ip->id = 0;
 	ip->frag_off = 0;
 	ip->ttl = 64;
@@ -190,6 +210,11 @@ static void reset(struct connection *c)
 	ip->check = 0;
 	ip->saddr = c->peer_address;
 	ip->daddr = c->address;
+
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+	tcpr_reset(tcp, &c->tcpr);
+
+	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
 	inject(skb);
 }
 
@@ -203,19 +228,14 @@ static void recover(struct connection *c)
 	if (skb == NULL)
 		return;
 
-	skb->ip_summed = CHECKSUM_NONE;
 	skb_reserve(skb, LL_MAX_HEADER);
 	skb_reset_network_header(skb);
 	skb_put(skb, 60);
 
 	ip = ip_hdr(skb);
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-
-	tcpr_recover(tcp, &c->tcpr);
 	ip->ihl = sizeof(*ip) / 4;
 	ip->version = 4;
 	ip->tos = 0;
-	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
 	ip->id = 0;
 	ip->frag_off = 0;
 	ip->ttl = 64;
@@ -223,6 +243,11 @@ static void recover(struct connection *c)
 	ip->check = 0;
 	ip->saddr = c->peer_address;
 	ip->daddr = c->address;
+
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+	tcpr_recover(tcp, &c->tcpr);
+
+	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
 	inject(skb);
 }
 
@@ -372,7 +397,7 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb)
 	spin_lock(&c->tcpr_lock);
 	done = c->tcpr.done;
 	printk(KERN_DEBUG "Before filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
-	switch (tcpr_filter(&c->tcpr, tcp, tcp_hdrlen(skb))) {
+	switch (tcpr_filter(&c->tcpr, tcp, ntohs(ip->tot_len) - ip->ihl * 4)) {
 	case TCPR_DELIVER:
 		printk(KERN_DEBUG "Delivering packet.\n");
 		verdict = NF_ACCEPT;
@@ -431,7 +456,7 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb)
 	spin_lock(&c->tcpr_lock);
 	done = c->tcpr.done;
 	printk(KERN_DEBUG "Before filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
-	tcpr_filter_peer(&c->tcpr, tcp, tcp_hdrlen(skb));
+	tcpr_filter_peer(&c->tcpr, tcp, ntohs(ip->tot_len) - ip->ihl * 4);
 	printk(KERN_DEBUG "Delivering packet.\n");
 	if (c->tcpr.done && !done) {
 		printk(KERN_DEBUG "Connection is now done.\n");
