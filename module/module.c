@@ -4,7 +4,9 @@
 #include <linux/module.h>
 #include <linux/skbuff.h>
 #include <linux/tcp.h>
+#include <linux/nsproxy.h>
 #include <linux/netfilter/x_tables.h>
+#include <net/route.h>
 
 #include <tcpr/types.h>
 #include <tcpr/filter.h>
@@ -33,7 +35,7 @@ static struct connection *lookup_internal(uint32_t address,
 {
 	struct connection *c;
 
-	list_for_each_entry(c, &connections, list)
+ 	list_for_each_entry(c, &connections, list)
 		if (c->peer_address == peer_address
 		    && c->address == address
 		    && c->tcpr.saved.peer.port == peer_port
@@ -72,7 +74,7 @@ static struct connection *connection_create(uint32_t address,
 		return c;
 	}
 
-	c = kmalloc(sizeof(*c), GFP_KERNEL);
+	c = kmalloc(sizeof(*c), GFP_ATOMIC);
 	if (!c) {
 		write_unlock(&connections_lock);
 		return NULL;
@@ -101,24 +103,121 @@ static void connection_close(struct connection *c)
 	kfree(c);
 }
 
+static int inject(struct sk_buff *skb)
+{
+	struct iphdr *ip = ip_hdr(skb);
+	struct rtable *rt;
+
+	rt = ip_route_output(current->nsproxy->net_ns, ip->saddr, ip->daddr,
+			     RT_TOS(ip->tos), 0);
+	if (IS_ERR(rt))
+		return -1;
+	skb_dst_set(skb, &rt->dst);
+	return skb_dst(skb)->output(skb);
+}
+
 static void update(struct connection *c)
 {
-	/* FIXME: inject update */
+	struct sk_buff *skb;
+	struct iphdr *ip;
+	struct tcphdr *tcp;
+
+	skb = alloc_skb(LL_MAX_HEADER + 60, GFP_ATOMIC);
+	if (skb == NULL)
+		return;
+
+	skb->ip_summed = CHECKSUM_NONE;
+	skb_reserve(skb, LL_MAX_HEADER);
+	skb_reset_network_header(skb);
+	skb_put(skb, 60);
+
+	ip = ip_hdr(skb);
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+
+	tcpr_update(tcp, &c->tcpr);
+	ip->ihl = sizeof(*ip) / 4;
+	ip->version = 4;
+	ip->tos = 0;
+	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
+	ip->id = 0;
+	ip->frag_off = 0;
+	ip->ttl = 64;
+	ip->protocol = IPPROTO_TCP;
+	ip->check = 0;
+	ip->saddr = c->address;
+	ip->daddr = c->peer_address;
+	inject(skb);
 }
 
 static void reset(struct connection *c)
 {
-	/* FIXME: inject update */
+	struct sk_buff *skb;
+	struct iphdr *ip;
+	struct tcphdr *tcp;
+
+	skb = alloc_skb(LL_MAX_HEADER + 60, GFP_ATOMIC);
+	if (skb == NULL)
+		return;
+
+	skb->ip_summed = CHECKSUM_NONE;
+	skb_reserve(skb, LL_MAX_HEADER);
+	skb_reset_network_header(skb);
+	skb_put(skb, 60);
+
+	ip = ip_hdr(skb);
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+
+	tcpr_reset(tcp, &c->tcpr);
+	ip->ihl = sizeof(*ip) / 4;
+	ip->version = 4;
+	ip->tos = 0;
+	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
+	ip->id = 0;
+	ip->frag_off = 0;
+	ip->ttl = 64;
+	ip->protocol = IPPROTO_TCP;
+	ip->check = 0;
+	ip->saddr = c->peer_address;
+	ip->daddr = c->address;
+	inject(skb);
 }
 
 static void recover(struct connection *c)
 {
-	/* FIXME: inject update */
+	struct sk_buff *skb;
+	struct iphdr *ip;
+	struct tcphdr *tcp;
+
+	skb = alloc_skb(LL_MAX_HEADER + 60, GFP_ATOMIC);
+	if (skb == NULL)
+		return;
+
+	skb->ip_summed = CHECKSUM_NONE;
+	skb_reserve(skb, LL_MAX_HEADER);
+	skb_reset_network_header(skb);
+	skb_put(skb, 60);
+
+	ip = ip_hdr(skb);
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+
+	tcpr_recover(tcp, &c->tcpr);
+	ip->ihl = sizeof(*ip) / 4;
+	ip->version = 4;
+	ip->tos = 0;
+	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
+	ip->id = 0;
+	ip->frag_off = 0;
+	ip->ttl = 64;
+	ip->protocol = IPPROTO_TCP;
+	ip->check = 0;
+	ip->saddr = c->peer_address;
+	ip->daddr = c->address;
+	inject(skb);
 }
 
 static int tcpr_open(struct inode *inode, struct file *file)
 {
-	printk(KERN_ERR "Opened TCPR handle.\n");
+	printk(KERN_INFO "Opened TCPR handle.\n");
 	file->private_data = NULL;
 	return 0;
 }
@@ -129,8 +228,13 @@ static int tcpr_release(struct inode *inode, struct file *file)
 
 	if (c != NULL && atomic_dec_and_test(&c->refcnt))
 		connection_close(c);
-	printk(KERN_ERR "Closed TCPR handle.\n");
+	printk(KERN_INFO "Closed TCPR handle.\n");
 	return 0;
+}
+
+static int test_done(struct connection *c)
+{
+	return c->tcpr.done;
 }
 
 static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -138,41 +242,27 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct connection *c = file->private_data;
 	int ret;
 
-	printk(KERN_ERR "Handling TCPR ioctl.\n");
 	if (cmd == TCPR_ATTACH) {
 		struct tcpr_connection tc;
 
-		printk(KERN_ERR "TCPR_ATTACH.\n");
-
-		if (c != NULL) {
-			printk(KERN_ERR "Attempted to reattach TCPR handle.\n");
+		if (c != NULL)
 			return -EEXIST;
-		}
 		
 		ret = copy_from_user(&tc, (struct tcpr_connection __user *)arg,
 				     sizeof(tc));
-		if (ret) {
-			printk(KERN_ERR "Could not access TCPR connection information.\n");
+		if (ret)
 			return ret;
-		}
 
 		c = connection_create(tc.address, tc.peer_address, tc.port, tc.peer_port);
-		if (!c) {
-			printk(KERN_ERR "Could not create TCPR connection.\n");
+		if (!c)
 			return -ENOMEM;
-		}
-
-		printk(KERN_ERR "TCPR_ATTACH We made it?\n");
 
 		file->private_data = c;
 		atomic_inc(&c->refcnt);
 		return 0;
 	} else if (c == NULL) {
-		printk(KERN_ERR "TCPR handle is unattached.\n");
 		return -ENOENT;
 	}
-
-	printk(KERN_ERR "Handling attached TCPR ioctl.\n");
 
 	spin_lock(&c->tcpr_lock);
 	switch (cmd) {
@@ -209,7 +299,7 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	case TCPR_WAIT:
 		spin_unlock(&c->tcpr_lock);
-		wait_event_interruptible(c->wait, c->tcpr.done);
+		wait_event_interruptible(c->wait, test_done(c));
 		return 0;
 
 	case TCPR_DONE:
@@ -229,20 +319,18 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static unsigned int tcpr_tg(struct sk_buff *skb,
-			    const struct xt_action_param *par)
+static unsigned int tcpr_tg_application(struct sk_buff *skb)
 {
 	struct iphdr *ip;
 	struct tcphdr *tcp;
 	struct connection *c;
 	unsigned int verdict = NF_DROP;
 	int done;
-	
-	if (!skb_make_writable(skb, skb->len))
-		return verdict;
 
 	ip = ip_hdr(skb);
-	tcp = tcp_hdr(skb);
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+	
+	printk(KERN_DEBUG "TCPR packet from application (syn %d, ack %d)\n", tcp->syn, tcp->ack);
 
 	read_lock(&connections_lock);
 	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest);
@@ -273,28 +361,26 @@ static unsigned int tcpr_tg(struct sk_buff *skb,
 	return verdict;
 }
 
-static unsigned int tcpr_peer_tg(struct sk_buff *skb,
-				 const struct xt_action_param *par)
+static unsigned int tcpr_tg_peer(struct sk_buff *skb)
 {
 	struct iphdr *ip;
 	struct tcphdr *tcp;
 	struct connection *c;
 	int done;
 
-	if (!skb_make_writable(skb, skb->len))
-		return NF_DROP;
-
 	ip = ip_hdr(skb);
-	tcp = tcp_hdr(skb);
+	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
+
+	printk(KERN_DEBUG "TCPR packet from peer (syn %d, ack %d)\n", tcp->syn, tcp->ack);
 
 	read_lock(&connections_lock);
-	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest);
+	c = lookup_external(ip->daddr, ip->saddr, tcp->dest, tcp->source);
 	read_unlock(&connections_lock);
 	if (!c) {
 		if (tcp->ack)
 			return NF_DROP;
-		c = connection_create(ip->saddr, ip->daddr,
-				      tcp->source, tcp->dest);
+		c = connection_create(ip->daddr, ip->saddr,
+				      tcp->dest, tcp->source);
 		if (!c)
 			return NF_DROP;
 	}
@@ -310,21 +396,28 @@ static unsigned int tcpr_peer_tg(struct sk_buff *skb,
 	return NF_ACCEPT;
 }
 
-static struct xt_target tcpr_tg_regs[] = {
-	{
-		.name = "tcpr",
-		.family = AF_INET,
-		.proto = IPPROTO_TCP,
-		.target = tcpr_tg,
-		.me = THIS_MODULE,
-	},
-	{
-		.name = "tcprpeer",
-		.family = AF_INET,
-		.proto = IPPROTO_TCP,
-		.target = tcpr_peer_tg,
-		.me = THIS_MODULE,
-	},
+static unsigned int tcpr_tg(struct sk_buff *skb,
+			    const struct xt_action_param *par)
+{
+	const int *peer = par->targinfo;
+
+	if (!skb_make_writable(skb, skb->len))
+		return NF_DROP;
+	if (*peer)
+		return tcpr_tg_peer(skb);
+	else
+		return tcpr_tg_application(skb);
+}
+
+static struct xt_target tcpr_tg_regs = {
+	.name = "TCPR",
+	.revision = 0,
+	.family = AF_INET,
+	.table = "mangle",
+	.proto = IPPROTO_TCP,
+	.target = tcpr_tg,
+	.targetsize = sizeof(int),
+	.me = THIS_MODULE,
 };
 
 static struct file_operations tcpr_fops = {
@@ -337,6 +430,9 @@ static struct file_operations tcpr_fops = {
 static int __init tcpr_tg_init(void)
 {
 	int ret;
+
+	rwlock_init(&connections_lock);
+	INIT_LIST_HEAD(&connections);
 
 	ret = alloc_chrdev_region(&tcpr_dev, 0, 1, "tcpr");
 	if (ret < 0) {
@@ -352,23 +448,23 @@ static int __init tcpr_tg_init(void)
 		return ret;
 	}
 
-	ret = xt_register_targets(tcpr_tg_regs, 2);
+	ret = xt_register_target(&tcpr_tg_regs);
 	if (ret < 0) {
-		printk(KERN_ERR "Unable to register TCPR Xtables targets\n");
+		printk(KERN_ERR "Unable to register TCPR Xtables target\n");
 		cdev_del(&tcpr_cdev);
 		unregister_chrdev_region(tcpr_dev, 1);
 	}
 
-	printk(KERN_ERR "TCPR loaded with major %u and minor %u.\n", MAJOR(tcpr_dev), MINOR(tcpr_dev));
+	printk(KERN_INFO "TCPR loaded with major %u and minor %u.\n", MAJOR(tcpr_dev), MINOR(tcpr_dev));
 	return 0;
 }
 
 static void __exit tcpr_tg_exit(void)
 {
-	xt_unregister_targets(tcpr_tg_regs, 2);
+	xt_unregister_target(&tcpr_tg_regs);
 	cdev_del(&tcpr_cdev);
 	unregister_chrdev_region(tcpr_dev, 1);
-	printk(KERN_ERR "TCPR unloaded\n");
+	printk(KERN_INFO "TCPR unloaded\n");
 }
 
 module_init(tcpr_tg_init);
@@ -376,5 +472,5 @@ module_exit(tcpr_tg_exit);
 
 MODULE_AUTHOR("Robert Surton <burgess@cs.cornell.edu>");
 MODULE_DESCRIPTION("Xtables: TCPR target");
-MODULE_LICENSE("BSD/GPL");
+MODULE_LICENSE("Dual BSD/GPL");
 MODULE_ALIAS("ipt_tcpr");

@@ -1,5 +1,5 @@
-obj-m += xt_tcpr.o
-xt_tcpr-objs := module.o tcpr.o
+obj-m += tcpr.o
+tcpr-objs := module.o tcprmod.o
 EXTRA_CFLAGS=-I$(PWD)/../include
 
 all:

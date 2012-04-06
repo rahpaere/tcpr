@@ -14,11 +14,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-static const char *internal_host = "127.0.0.3";
-static const char *external_host = "127.0.0.2";
+static const char *host = "127.0.0.1";
+static const char *port = "8888";
 static const char *peer_host = "127.0.0.1";
 static const char *peer_port = "9999";
-static const char *port = "8888";
 
 static int running_peer;
 static int application_is_server;
@@ -45,17 +44,14 @@ static void print_help_and_exit(const char *program)
 		"connection, using TCPR.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Options:\n");
-	fprintf(stderr, "  -i HOST  "
-		"Internally, the application is bound to HOST.\n");
-	fprintf(stderr, "  -e HOST  "
-		"Externally, the application is bound to HOST.\n");
-	fprintf(stderr, "  -a PORT  The application is bound to PORT.\n");
-	fprintf(stderr, "  -h HOST  The peer is bound to HOST.\n");
-	fprintf(stderr, "  -p PORT  The peer is bound to PORT.\n");
+	fprintf(stderr, "  -h HOST  The application is bound to HOST.\n");
+	fprintf(stderr, "  -p PORT  The application is bound to PORT.\n");
+	fprintf(stderr, "  -H HOST  The peer is bound to HOST.\n");
+	fprintf(stderr, "  -P PORT  The peer is bound to PORT.\n");
 	fprintf(stderr, "  -s       The application is the TCP server.\n");
 	fprintf(stderr, "  -C       Bypass checkpointed acknowledgments.\n");
 	fprintf(stderr, "  -T       Do not use TCPR.\n");
-	fprintf(stderr, "  -P       Run as the peer.\n");
+	fprintf(stderr, "  -o       Run as the peer.\n");
 	fprintf(stderr, "  -?       Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
@@ -63,20 +59,17 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "i:e:a:h:p:sCTP?")) {
-		case 'i':
-			internal_host = optarg;
-			break;
-		case 'e':
-			external_host = optarg;
-			break;
-		case 'a':
-			port = optarg;
-			break;
+		switch (getopt(argc, argv, "h:p:H:P:sCTo?")) {
 		case 'h':
-			peer_host = optarg;
+			host = optarg;
 			break;
 		case 'p':
+			port = optarg;
+			break;
+		case 'H':
+			peer_host = optarg;
+			break;
+		case 'P':
 			peer_port = optarg;
 			break;
 		case 's':
@@ -88,7 +81,7 @@ static void handle_options(int argc, char **argv)
 		case 'T':
 			using_tcpr = 0;
 			break;
-		case 'P':
+		case 'o':
 			running_peer = 1;
 			using_tcpr = 0;
 			break;
@@ -133,11 +126,11 @@ static void setup(void)
 		bind_host = peer_host;
 		bind_port = peer_port;
 		if (application_is_server) {
-			connect_host = external_host;
+			connect_host = host;
 			connect_port = port;
 		}
 	} else {
-		bind_host = using_tcpr ? internal_host : external_host;
+		bind_host = host;
 		bind_port = port;
 		if (!application_is_server) {
 			connect_host = peer_host;
