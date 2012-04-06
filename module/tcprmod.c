@@ -158,15 +158,12 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 	t->peer.win = h->window;
 
 	if (h->syn) {
-		printk(KERN_ERR "saving ports\n");
 		t->saved.internal_port = h->dest;
 		t->saved.external_port = h->dest;
 		t->saved.peer.port = h->source;
 		t->saved.ack = htonl(ntohl(h->seq) + 1);
 		if (h->ack)
 			t->saved.safe = h->ack_seq;
-	} else {
-		printk(KERN_ERR "not saving ports because not SYN\n");
 	}
 
 	if (h->fin) {

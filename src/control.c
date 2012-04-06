@@ -192,6 +192,10 @@ static void update(void)
 
 static void print(void)
 {
+	if (ioctl(tcprfd, TCPR_GET, &tcpr) < 0) {
+		perror("Getting TCPR state");
+		exit(EXIT_FAILURE);
+	}
 	if (tcpr.saved.external_port)
 		printf("%12" PRIu16 "  External port\n",
 			ntohs(tcpr.saved.external_port));

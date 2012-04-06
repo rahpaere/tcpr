@@ -35,12 +35,16 @@ static struct connection *lookup_internal(uint32_t address,
 {
 	struct connection *c;
 
- 	list_for_each_entry(c, &connections, list)
+	printk(KERN_DEBUG "lookup_internal(%x, %x, %hu, %hu)\n", htonl(address), htonl(peer_address), htons(port), htons(peer_port));
+ 	list_for_each_entry(c, &connections, list) {
+		printk(KERN_DEBUG "list entry (%x, %x, %hu, %hu)\n", htonl(c->address), htonl(c->peer_address), htons(c->tcpr.saved.external_port), htons(c->tcpr.saved.peer.port));
 		if (c->peer_address == peer_address
 		    && c->address == address
 		    && c->tcpr.saved.peer.port == peer_port
 		    && c->tcpr.saved.internal_port == port)
 			return c;
+	}
+	printk(KERN_DEBUG "no match.\n");
 	return NULL;
 }
 
@@ -51,12 +55,16 @@ static struct connection *lookup_external(uint32_t address,
 {
 	struct connection *c;
 
-	list_for_each_entry(c, &connections, list)
+	printk(KERN_DEBUG "lookup_external(%x, %x, %hu, %hu)\n", htonl(address), htonl(peer_address), htons(port), htons(peer_port));
+	list_for_each_entry(c, &connections, list) {
+		printk(KERN_DEBUG "list entry (%x, %x, %hu, %hu)\n", htonl(c->address), htonl(c->peer_address), htons(c->tcpr.saved.external_port), htons(c->tcpr.saved.peer.port));
 		if (c->peer_address == peer_address
 		    && c->address == address
 		    && c->tcpr.saved.peer.port == peer_port
 		    && c->tcpr.saved.external_port == port)
 			return c;
+	}
+	printk(KERN_DEBUG "no match.\n");
 	return NULL;
 }
 
@@ -84,6 +92,9 @@ static struct connection *connection_create(uint32_t address,
 	memset(&c->tcpr, 0, sizeof(c->tcpr));
 	c->address = address;
 	c->peer_address = peer_address;
+	c->tcpr.saved.internal_port = port;
+	c->tcpr.saved.external_port = port;
+	c->tcpr.saved.peer.port = peer_port;
 	atomic_set(&c->refcnt, 1);
 	init_waitqueue_head(&c->wait);
 	spin_lock_init(&c->tcpr_lock);
@@ -226,7 +237,7 @@ static int tcpr_release(struct inode *inode, struct file *file)
 {
 	struct connection *c = file->private_data;
 
-	if (c != NULL && atomic_dec_and_test(&c->refcnt))
+	if (c != NULL)
 		connection_close(c);
 	printk(KERN_INFO "Closed TCPR handle.\n");
 	return 0;
@@ -259,6 +270,7 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		file->private_data = c;
 		atomic_inc(&c->refcnt);
+		printk(KERN_DEBUG "TCPR_ATTACH\n");
 		return 0;
 	} else if (c == NULL) {
 		return -ENOENT;
@@ -273,33 +285,41 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			spin_unlock(&c->tcpr_lock);
 			return ret;
 		}
+		printk(KERN_DEBUG "TCPR_GET\n");
 		break;
 
 	case TCPR_ACK:
 		c->tcpr.saved.ack = htonl(ntohl(c->tcpr.saved.ack) + arg);
 		update(c);
+		printk(KERN_DEBUG "TCPR_ACK %ld\n", arg);
 		break;
 		
 	case TCPR_DONE_READING:
 		c->tcpr.saved.done_reading = 1;
+		printk(KERN_DEBUG "TCPR_DONE_READING\n");
 		break;
 
 	case TCPR_DONE_WRITING:
 		c->tcpr.saved.done_writing = 1;
+		printk(KERN_DEBUG "TCPR_DONE_WRITING\n");
 		break;
 
 	case TCPR_CLOSE:
 		c->tcpr.saved.done_reading = 1;
 		c->tcpr.saved.done_writing = 1;
+		printk(KERN_DEBUG "TCPR_CLOSE\n");
 		break;
 
 	case TCPR_KILL:
 		reset(c);
+		printk(KERN_DEBUG "TCPR_KILL\n");
 		break;
 
 	case TCPR_WAIT:
 		spin_unlock(&c->tcpr_lock);
+		printk(KERN_DEBUG "entering TCPR_WAIT\n");
 		wait_event_interruptible(c->wait, test_done(c));
+		printk(KERN_DEBUG "TCPR_WAIT\n");
 		return 0;
 
 	case TCPR_DONE:
@@ -308,6 +328,7 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			wake_up_interruptible(&c->wait);
 			connection_close(c);
 		}
+		printk(KERN_DEBUG "TCPR_DONE\n");
 		break;
 
 	default:
@@ -330,33 +351,54 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb)
 	ip = ip_hdr(skb);
 	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
 	
-	printk(KERN_DEBUG "TCPR packet from application (syn %d, ack %d)\n", tcp->syn, tcp->ack);
+	printk(KERN_DEBUG "TCPR packet from application (syn %d, ack %d, fin %d, rst %d)\n", tcp->syn, tcp->ack, tcp->fin, tcp->rst);
 
 	read_lock(&connections_lock);
 	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest);
 	read_unlock(&connections_lock);
-	if (!c)
+	if (!c) {
+		if (tcp->ack)
+			return NF_DROP;
+		c = connection_create(ip->saddr, ip->daddr,
+				      tcp->source, tcp->dest);
+		if (!c)
+			return NF_DROP;
+	}
+	if (!c) {
+		printk(KERN_DEBUG "No TCPR connection for application packet.\n");
 		return verdict;
+	}
 
 	spin_lock(&c->tcpr_lock);
 	done = c->tcpr.done;
+	printk(KERN_DEBUG "Before filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
 	switch (tcpr_filter(&c->tcpr, tcp, tcp_hdrlen(skb))) {
 	case TCPR_DELIVER:
+		printk(KERN_DEBUG "Delivering packet.\n");
 		verdict = NF_ACCEPT;
 		break;
 	case TCPR_DROP:
+		printk(KERN_DEBUG "Dropping packet.\n");
 		break;
 	case TCPR_RESET:
+		printk(KERN_DEBUG "Dropping packet and sending RST.\n");
 		reset(c);
 		break;
 	case TCPR_RECOVER:
+		printk(KERN_DEBUG "Dropping packet and sending SYN ACK.\n");
 		recover(c);
 		break;
+	default:
+		printk(KERN_DEBUG "Unknown TCPR response.\n");
+		BUG();
 	}
 	if (c->tcpr.done && !done) {
+		printk(KERN_DEBUG "Connection is now done.\n");
 		wake_up_interruptible(&c->wait);
 		connection_close(c);
 	}
+	printk(KERN_DEBUG "After filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
+	printk(KERN_DEBUG "Done with this packet.\n");
 	spin_unlock(&c->tcpr_lock);
 	return verdict;
 }
@@ -371,7 +413,8 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb)
 	ip = ip_hdr(skb);
 	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
 
-	printk(KERN_DEBUG "TCPR packet from peer (syn %d, ack %d)\n", tcp->syn, tcp->ack);
+	printk(KERN_DEBUG "TCPR packet from peer (syn %d, ack %d, fin %d, rst %d)\n", tcp->syn, tcp->ack, tcp->fin, tcp->rst);
+
 
 	read_lock(&connections_lock);
 	c = lookup_external(ip->daddr, ip->saddr, tcp->dest, tcp->source);
@@ -387,11 +430,16 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb)
 
 	spin_lock(&c->tcpr_lock);
 	done = c->tcpr.done;
+	printk(KERN_DEBUG "Before filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
 	tcpr_filter_peer(&c->tcpr, tcp, tcp_hdrlen(skb));
+	printk(KERN_DEBUG "Delivering packet.\n");
 	if (c->tcpr.done && !done) {
+		printk(KERN_DEBUG "Connection is now done.\n");
 		wake_up_interruptible(&c->wait);
 		connection_close(c);
 	}
+	printk(KERN_DEBUG "After filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
+	printk(KERN_DEBUG "Done with this packet.\n");
 	spin_unlock(&c->tcpr_lock);
 	return NF_ACCEPT;
 }
