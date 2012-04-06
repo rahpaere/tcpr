@@ -200,7 +200,8 @@ static int output_skb(struct net *net_ns, struct packet *packet)
 	skb_dst_set(skb, &rt->dst);
 	skb->dev = skb_dst(skb)->dev;
 	skb->protocol = htons(ETH_P_IP);
-	return dst_output(skb);
+//	return dst_output(skb);
+	return output_finish(skb);
 }
 
 static void inject(struct connection *c, int mode)
