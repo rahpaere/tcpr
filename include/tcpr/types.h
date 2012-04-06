@@ -1,7 +1,9 @@
 #ifndef TCPR_TYPES_H
 #define TCPR_TYPES_H
 
-#ifndef __KERNEL__
+#ifdef __KERNEL__
+#include <linux/types.h>
+#else
 #include <stdint.h>
 #endif
 

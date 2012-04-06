@@ -1,3 +1,4 @@
+#include <linux/cdev.h>
 #include <linux/list.h>
 #include <linux/ip.h>
 #include <linux/module.h>
@@ -100,17 +101,36 @@ static void connection_close(struct connection *c)
 	kfree(c);
 }
 
-static void tcpr_open(struct inode *inode, struct file *file)
+static void update(struct connection *c)
 {
-	file->private_data = NULL;
+	/* FIXME: inject update */
 }
 
-static void tcpr_release(struct inode *inode, struct file *file)
+static void reset(struct connection *c)
+{
+	/* FIXME: inject update */
+}
+
+static void recover(struct connection *c)
+{
+	/* FIXME: inject update */
+}
+
+static int tcpr_open(struct inode *inode, struct file *file)
+{
+	printk(KERN_ERR "Opened TCPR handle.\n");
+	file->private_data = NULL;
+	return 0;
+}
+
+static int tcpr_release(struct inode *inode, struct file *file)
 {
 	struct connection *c = file->private_data;
 
 	if (c != NULL && atomic_dec_and_test(&c->refcnt))
-		kfree(c);
+		connection_close(c);
+	printk(KERN_ERR "Closed TCPR handle.\n");
+	return 0;
 }
 
 static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
@@ -118,27 +138,41 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	struct connection *c = file->private_data;
 	int ret;
 
+	printk(KERN_ERR "Handling TCPR ioctl.\n");
 	if (cmd == TCPR_ATTACH) {
 		struct tcpr_connection tc;
 
-		if (c != NULL)
+		printk(KERN_ERR "TCPR_ATTACH.\n");
+
+		if (c != NULL) {
+			printk(KERN_ERR "Attempted to reattach TCPR handle.\n");
 			return -EEXIST;
+		}
 		
 		ret = copy_from_user(&tc, (struct tcpr_connection __user *)arg,
 				     sizeof(tc));
-		if (ret)
+		if (ret) {
+			printk(KERN_ERR "Could not access TCPR connection information.\n");
 			return ret;
+		}
 
 		c = connection_create(tc.address, tc.peer_address, tc.port, tc.peer_port);
-		if (!c)
+		if (!c) {
+			printk(KERN_ERR "Could not create TCPR connection.\n");
 			return -ENOMEM;
+		}
+
+		printk(KERN_ERR "TCPR_ATTACH We made it?\n");
 
 		file->private_data = c;
 		atomic_inc(&c->refcnt);
 		return 0;
 	} else if (c == NULL) {
+		printk(KERN_ERR "TCPR handle is unattached.\n");
 		return -ENOENT;
 	}
+
+	printk(KERN_ERR "Handling attached TCPR ioctl.\n");
 
 	spin_lock(&c->tcpr_lock);
 	switch (cmd) {
@@ -196,29 +230,29 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 }
 
 static unsigned int tcpr_tg(struct sk_buff *skb,
-				  const struct xt_target_param *par)
+			    const struct xt_action_param *par)
 {
 	struct iphdr *ip;
 	struct tcphdr *tcp;
 	struct connection *c;
 	unsigned int verdict = NF_DROP;
 	int done;
-
-	if (!skb_make_writeable(skb, skb->len))
+	
+	if (!skb_make_writable(skb, skb->len))
 		return verdict;
 
 	ip = ip_hdr(skb);
 	tcp = tcp_hdr(skb);
 
 	read_lock(&connections_lock);
-	c = lookup_internal(ip->src, ip->dst, tcp->src, tcp->dst);
+	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest);
 	read_unlock(&connections_lock);
 	if (!c)
 		return verdict;
 
 	spin_lock(&c->tcpr_lock);
-	done = c->tcpr->done;
-	switch (tcpr_filter(c->tcpr, tcp, tcp_hdrlen(skb))) {
+	done = c->tcpr.done;
+	switch (tcpr_filter(&c->tcpr, tcp, tcp_hdrlen(skb))) {
 	case TCPR_DELIVER:
 		verdict = NF_ACCEPT;
 		break;
@@ -231,8 +265,7 @@ static unsigned int tcpr_tg(struct sk_buff *skb,
 		recover(c);
 		break;
 	}
-
-	if (c->tcpr->done && !done) {
+	if (c->tcpr.done && !done) {
 		wake_up_interruptible(&c->wait);
 		connection_close(c);
 	}
@@ -241,34 +274,35 @@ static unsigned int tcpr_tg(struct sk_buff *skb,
 }
 
 static unsigned int tcpr_peer_tg(struct sk_buff *skb,
-				 const struct xt_target_param *par)
+				 const struct xt_action_param *par)
 {
 	struct iphdr *ip;
 	struct tcphdr *tcp;
 	struct connection *c;
 	int done;
 
-	if (!skb_make_writeable(skb, skb->len))
+	if (!skb_make_writable(skb, skb->len))
 		return NF_DROP;
 
 	ip = ip_hdr(skb);
 	tcp = tcp_hdr(skb);
 
 	read_lock(&connections_lock);
-	c = lookup_internal(ip->src, ip->dst, tcp->src, tcp->dst);
+	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest);
 	read_unlock(&connections_lock);
 	if (!c) {
 		if (tcp->ack)
 			return NF_DROP;
-		c = connection_create(ip->src, ip->dst, tcp->src, tcp->dst);
+		c = connection_create(ip->saddr, ip->daddr,
+				      tcp->source, tcp->dest);
 		if (!c)
 			return NF_DROP;
 	}
 
 	spin_lock(&c->tcpr_lock);
-	done = c->tcpr->done;
-	tcpr_filter_peer(c->tcpr, tcp, tcp_hdrlen(skb));
-	if (c->tcpr->done && !done) {
+	done = c->tcpr.done;
+	tcpr_filter_peer(&c->tcpr, tcp, tcp_hdrlen(skb));
+	if (c->tcpr.done && !done) {
 		wake_up_interruptible(&c->wait);
 		connection_close(c);
 	}
@@ -279,14 +313,14 @@ static unsigned int tcpr_peer_tg(struct sk_buff *skb,
 static struct xt_target tcpr_tg_regs[] = {
 	{
 		.name = "tcpr",
-		.family = NFPROTO_IP,
+		.family = AF_INET,
 		.proto = IPPROTO_TCP,
 		.target = tcpr_tg,
 		.me = THIS_MODULE,
 	},
 	{
 		.name = "tcprpeer",
-		.family = NFPROTO_IP,
+		.family = AF_INET,
 		.proto = IPPROTO_TCP,
 		.target = tcpr_peer_tg,
 		.me = THIS_MODULE,
@@ -304,9 +338,9 @@ static int __init tcpr_tg_init(void)
 {
 	int ret;
 
-	ret = alloc_chrdev_region(&tcpr_dev, TCPR_MAJOR, 1, "tcpr");
+	ret = alloc_chrdev_region(&tcpr_dev, 0, 1, "tcpr");
 	if (ret < 0) {
-		printk(KERN_ERR "Unable to allocate TCPR device region\n");
+		printk(KERN_ERR "Unable to register TCPR device region\n");
 		return ret;
 	}
 
@@ -318,26 +352,29 @@ static int __init tcpr_tg_init(void)
 		return ret;
 	}
 
-	ret = xtables_register_targets(tcpr_tg_regs, 2);
+	ret = xt_register_targets(tcpr_tg_regs, 2);
 	if (ret < 0) {
 		printk(KERN_ERR "Unable to register TCPR Xtables targets\n");
 		cdev_del(&tcpr_cdev);
 		unregister_chrdev_region(tcpr_dev, 1);
 	}
+
+	printk(KERN_ERR "TCPR loaded with major %u and minor %u.\n", MAJOR(tcpr_dev), MINOR(tcpr_dev));
+	return 0;
 }
 
 static void __exit tcpr_tg_exit(void)
 {
-	xtables_unregister_targets(tcpr_tg_regs, 2);
-
+	xt_unregister_targets(tcpr_tg_regs, 2);
 	cdev_del(&tcpr_cdev);
 	unregister_chrdev_region(tcpr_dev, 1);
+	printk(KERN_ERR "TCPR unloaded\n");
 }
 
 module_init(tcpr_tg_init);
-module_init(tcpr_tg_exit);
+module_exit(tcpr_tg_exit);
 
 MODULE_AUTHOR("Robert Surton <burgess@cs.cornell.edu>");
 MODULE_DESCRIPTION("Xtables: TCPR target");
-MODULE_LICENSE("BSD");
+MODULE_LICENSE("BSD/GPL");
 MODULE_ALIAS("ipt_tcpr");

@@ -3,13 +3,12 @@
 
 #include <tcpr/types.h>
 
-#ifndef __KERNEL__
+#ifdef __KERNEL__
+#include <linux/types.h>
+#include <linux/tcp.h>
+#else
 #include <netinet/tcp.h>
 #include <stdlib.h>
-#endif
-
-#ifndef TCPOPT_MD5
-#define TCPOPT_MD5 19
 #endif
 
 enum tcpr_verdict {

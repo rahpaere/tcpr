@@ -1,11 +1,17 @@
-#include <tcpr/application.h>
+#include <tcpr/types.h>
+#include <tcpr/module.h>
 
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 static const char *internal_host = "127.0.0.3";
@@ -20,7 +26,9 @@ static int using_tcpr = 1;
 static int checkpointing = 1;
 
 static int sock;
-static struct tcpr_connection tcpr;
+static int tcprfd;
+struct tcpr tcpr;
+struct tcpr_connection tcprc;
 
 static char send_buffer[512];
 static char receive_buffer[512];
@@ -187,14 +195,23 @@ static void setup(void)
 	getsockname(sock, (struct sockaddr *)&address, &addrlen);
 
 	if (using_tcpr) {
-		if (tcpr_setup_connection(&tcpr, peer_address.sin_addr.s_addr,
-						peer_address.sin_port,
-						address.sin_port, 0) < 0) {
-			perror("Opening state");
+		tcprfd = open("/dev/tcpr", O_RDWR);
+		if (tcprfd < 0) {
+			perror("Opening TCPR handle");
 			exit(EXIT_FAILURE);
 		}
-		if (!checkpointing)
-			tcpr_shutdown_input(&tcpr);
+		tcprc.address = address.sin_addr.s_addr;
+		tcprc.peer_address = peer_address.sin_addr.s_addr;
+		tcprc.port = address.sin_port;
+		tcprc.peer_port = peer_address.sin_port;
+		if (ioctl(tcprfd, TCPR_ATTACH, &tcprc) < 0) {
+			perror("Attaching to connection");
+			exit(EXIT_FAILURE);
+		}
+		if (!checkpointing && ioctl(tcprfd, TCPR_DONE_READING) < 0) {
+			perror("Shutting down input");
+			exit(EXIT_FAILURE);
+		}
 	}
 }
 
@@ -226,15 +243,19 @@ static void handle_events(void)
 					sizeof(receive_buffer)
 						- receive_buffer_size);
 			if (n > 0) {
-				if (using_tcpr && checkpointing)
-					tcpr_checkpoint_input(&tcpr, n);
+				if (using_tcpr && checkpointing && ioctl(tcprfd, TCPR_ACK, n) < 0) {
+					perror("Acknowledging data");
+					exit(EXIT_FAILURE);
+				}
 				receive_buffer_size += n;
 			} else if (n < 0) {
 				perror("Reading from peer");
 				exit(EXIT_FAILURE);
 			} else {
-				if (using_tcpr)
-					tcpr_shutdown_input(&tcpr);
+				if (using_tcpr && ioctl(tcprfd, TCPR_DONE_READING) < 0) {
+					perror("Shutting down input");
+					exit(EXIT_FAILURE);
+				}
 				shutdown(sock, SHUT_RD);
 				peer_eof = 1;
 			}
@@ -248,8 +269,10 @@ static void handle_events(void)
 					memmove(send_buffer, &send_buffer[n],
 						send_buffer_size);
 				} else if (user_eof) {
-					if (using_tcpr)
-						tcpr_shutdown_output(&tcpr);
+					if (using_tcpr && ioctl(tcprfd, TCPR_DONE_WRITING) < 0) {
+						perror("Shutting down output");
+						exit(EXIT_FAILURE);
+					}
 					shutdown(sock, SHUT_WR);
 				}
 			} else if (n < 0) {
@@ -269,8 +292,10 @@ static void handle_events(void)
 			} else {
 				user_eof = 1;
 				if (send_buffer_size == 0) {
-					if (using_tcpr)
-						tcpr_shutdown_output(&tcpr);
+					if (using_tcpr && ioctl(tcprfd, TCPR_DONE_WRITING) < 0) {
+						perror("Shutting down output");
+						exit(EXIT_FAILURE);
+					}
 					shutdown(sock, SHUT_WR);
 				}
 			}
@@ -295,8 +320,14 @@ static void handle_events(void)
 static void teardown(void)
 {
 	if (using_tcpr) {
-		tcpr_wait(&tcpr);
-		tcpr_teardown_connection(&tcpr);
+		if (ioctl(tcprfd, TCPR_WAIT) < 0) {
+			perror("Waiting for connection to close");
+			exit(EXIT_FAILURE);
+		}
+		if (close(tcprfd) < 0) {
+			perror("Closing TCPR handle");
+			exit(EXIT_FAILURE);
+		}
 	}
 	if (close(sock) < 0)
 		perror("Closing");
