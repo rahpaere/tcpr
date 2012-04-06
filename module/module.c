@@ -20,6 +20,7 @@ struct connection {
 	atomic_t refcnt;
 	spinlock_t tcpr_lock;
 	wait_queue_head_t wait;
+	struct socket *sock;
 };
 
 static rwlock_t connections_lock;
@@ -31,17 +32,19 @@ static dev_t tcpr_dev;
 static struct connection *lookup_internal(uint32_t address,
 					  uint32_t peer_address,
 					  uint16_t port,
-					  uint16_t peer_port)
+					  uint16_t peer_port,
+					  struct net *net_ns)
 {
 	struct connection *c;
 
-	printk(KERN_DEBUG "lookup_internal(%x, %x, %hu, %hu)\n", htonl(address), htonl(peer_address), htons(port), htons(peer_port));
+	printk(KERN_DEBUG "lookup_internal(%x, %x, %hu, %hu, %p)\n", htonl(address), htonl(peer_address), htons(port), htons(peer_port), net_ns);
  	list_for_each_entry(c, &connections, list) {
-		printk(KERN_DEBUG "list entry (%x, %x, %hu, %hu)\n", htonl(c->address), htonl(c->peer_address), htons(c->tcpr.saved.external_port), htons(c->tcpr.saved.peer.port));
+		printk(KERN_DEBUG "list entry (%x, %x, %hu, %hu, %p)\n", htonl(c->address), htonl(c->peer_address), htons(c->tcpr.saved.external_port), htons(c->tcpr.saved.peer.port), c->sock->sk->sk_net);
 		if (c->peer_address == peer_address
 		    && c->address == address
 		    && c->tcpr.saved.peer.port == peer_port
-		    && c->tcpr.saved.internal_port == port)
+		    && c->tcpr.saved.internal_port == port
+		    && c->sock->sk->sk_net == net_ns)
 			return c;
 	}
 	printk(KERN_DEBUG "no match.\n");
@@ -51,17 +54,19 @@ static struct connection *lookup_internal(uint32_t address,
 static struct connection *lookup_external(uint32_t address,
 					  uint32_t peer_address,
 					  uint16_t port,
-					  uint16_t peer_port)
+					  uint16_t peer_port,
+					  struct net *net_ns)
 {
 	struct connection *c;
 
-	printk(KERN_DEBUG "lookup_external(%x, %x, %hu, %hu)\n", htonl(address), htonl(peer_address), htons(port), htons(peer_port));
+	printk(KERN_DEBUG "lookup_external(%x, %x, %hu, %hu, %p)\n", htonl(address), htonl(peer_address), htons(port), htons(peer_port), net_ns);
 	list_for_each_entry(c, &connections, list) {
-		printk(KERN_DEBUG "list entry (%x, %x, %hu, %hu)\n", htonl(c->address), htonl(c->peer_address), htons(c->tcpr.saved.external_port), htons(c->tcpr.saved.peer.port));
+		printk(KERN_DEBUG "list entry (%x, %x, %hu, %hu, %p)\n", htonl(c->address), htonl(c->peer_address), htons(c->tcpr.saved.external_port), htons(c->tcpr.saved.peer.port), c->sock->sk->sk_net);
 		if (c->peer_address == peer_address
 		    && c->address == address
 		    && c->tcpr.saved.peer.port == peer_port
-		    && c->tcpr.saved.external_port == port)
+		    && c->tcpr.saved.external_port == port
+		    && c->sock->sk->sk_net == net_ns)
 			return c;
 	}
 	printk(KERN_DEBUG "no match.\n");
@@ -71,12 +76,14 @@ static struct connection *lookup_external(uint32_t address,
 static struct connection *connection_create(uint32_t address,
 					    uint32_t peer_address,
 					    uint16_t port,
-					    uint16_t peer_port)
+					    uint16_t peer_port,
+					    struct net *net_ns)
 {
 	struct connection *c;
+	int ret;
 
 	write_lock(&connections_lock);
-	c = lookup_external(address, peer_address, port, peer_port);
+	c = lookup_external(address, peer_address, port, peer_port, net_ns);
 	if (c != NULL) {
 		write_unlock(&connections_lock);
 		return c;
@@ -99,6 +106,13 @@ static struct connection *connection_create(uint32_t address,
 	init_waitqueue_head(&c->wait);
 	spin_lock_init(&c->tcpr_lock);
 
+	ret = __sock_create(net_ns, AF_INET, SOCK_RAW, IPPROTO_RAW, &c->sock, 1);
+	if (ret) {
+		write_unlock(&connections_lock);
+		kfree(c);
+		return NULL;
+	}
+
 	list_add(&c->list, &connections);
 	write_unlock(&connections_lock);
 	return c;
@@ -111,144 +125,63 @@ static void connection_close(struct connection *c)
 	write_lock(&connections_lock);
 	list_del(&c->list);
 	write_unlock(&connections_lock);
+	sock_release(c->sock);
 	kfree(c);
 }
 
-static int inject(struct sk_buff *skb)
+static void inject(struct connection *c, int mode)
 {
-	struct iphdr *ip = ip_hdr(skb);
-	struct tcphdr *tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-	struct rtable *rt;
-	int ret;
+	struct {
+		struct iphdr ip;
+		struct tcphdr tcp;
+	} packet;
+	struct iovec iov;
+	struct msghdr msg;
 	int len;
 
-	len = ntohs(ip->tot_len) - ip->ihl * 4;
-	ip->check = 0;
-	tcp->check = 0;
-	printk(KERN_DEBUG "inject, len = %d - %d = %d\n", ntohs(ip->tot_len), ip->ihl * 4, len);
-	tcp->check = csum_tcpudp_magic(ip->saddr, ip->daddr, len, ip->protocol,
-				       csum_partial(tcp, len, 0));
-	printk(KERN_DEBUG "tcp->check = %hx\n", tcp->check);
-	ip->check = ip_fast_csum(ip, ip->ihl);
-	skb->ip_summed = CHECKSUM_NONE;
-	printk(KERN_DEBUG "ip->check = %hx\n", ip->check);
+	memset(&packet, 0, sizeof(packet));
+	packet.ip.ihl = sizeof(packet.ip) / 4;
+	packet.ip.version = 4;
+	packet.ip.ttl = 64;
+	packet.ip.protocol = IPPROTO_TCP;
 
-	rt = ip_route_output(&init_net, ip->saddr, ip->daddr,
-			     RT_TOS(ip->tos), 0);
-	if (IS_ERR(rt))
-		return -1;
-	printk(KERN_DEBUG "routed!\n");
+	switch (mode) {
+	case TCPR_RESET:
+		tcpr_reset(&packet.tcp, &c->tcpr);
+		packet.ip.saddr = c->peer_address;
+		packet.ip.daddr = c->address;
+		break;
 
-	skb_dst_set(skb, &rt->dst);
-	skb->dev = rt->dst.dev;
-	skb->protocol = htons(ETH_P_IP);
-	printk(KERN_DEBUG "about to dst_output\n");
-	ret = dst_output(skb);
-	return 0;
-	if (ret) {
-		printk(KERN_DEBUG "dst_output failed\n");
-		return ret;
+	case TCPR_RECOVER:
+		tcpr_recover(&packet.tcp, &c->tcpr);
+		packet.ip.saddr = c->peer_address;
+		packet.ip.daddr = c->address;
+		break;
+
+	default:
+		tcpr_update(&packet.tcp, &c->tcpr);
+		packet.ip.saddr = c->address;
+		packet.ip.daddr = c->peer_address;
 	}
-	return 0;
-}
 
-static void update(struct connection *c)
-{
-	struct sk_buff *skb;
-	struct iphdr *ip;
-	struct tcphdr *tcp;
+	packet.ip.tot_len = htons(sizeof(packet.ip) + packet.tcp.doff * 4);
+        packet.ip.check = ip_fast_csum(&packet.ip, packet.ip.ihl);
+	packet.tcp.check = csum_tcpudp_magic(packet.ip.saddr, packet.ip.daddr,
+					     sizeof(packet.tcp), IPPROTO_TCP,
+					     csum_partial(&packet.tcp,
+							  sizeof(packet.tcp),
+							  0));
 
-	skb = alloc_skb(LL_MAX_HEADER + 60, GFP_ATOMIC);
-	if (skb == NULL)
-		return;
+	iov.iov_len = sizeof(packet);
+	iov.iov_base = &packet;
 
-	skb_reserve(skb, LL_MAX_HEADER);
-	skb_reset_network_header(skb);
-	skb_put(skb, 60);
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
 
-	ip = ip_hdr(skb);
-	ip->ihl = sizeof(*ip) / 4;
-	ip->version = 4;
-	ip->tos = 0;
-	ip->id = 0;
-	ip->frag_off = 0;
-	ip->ttl = 64;
-	ip->protocol = IPPROTO_TCP;
-	ip->check = 0;
-	ip->saddr = c->address;
-	ip->daddr = c->peer_address;
-
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-	tcpr_update(tcp, &c->tcpr);
-
-	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
-	inject(skb);
-}
-
-static void reset(struct connection *c)
-{
-	struct sk_buff *skb;
-	struct iphdr *ip;
-	struct tcphdr *tcp;
-
-	skb = alloc_skb(LL_MAX_HEADER + 60, GFP_ATOMIC);
-	if (skb == NULL)
-		return;
-
-	skb_reserve(skb, LL_MAX_HEADER);
-	skb_reset_network_header(skb);
-	skb_put(skb, 60);
-
-	ip = ip_hdr(skb);
-	ip->ihl = sizeof(*ip) / 4;
-	ip->version = 4;
-	ip->tos = 0;
-	ip->id = 0;
-	ip->frag_off = 0;
-	ip->ttl = 64;
-	ip->protocol = IPPROTO_TCP;
-	ip->check = 0;
-	ip->saddr = c->peer_address;
-	ip->daddr = c->address;
-
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-	tcpr_reset(tcp, &c->tcpr);
-
-	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
-	inject(skb);
-}
-
-static void recover(struct connection *c)
-{
-	struct sk_buff *skb;
-	struct iphdr *ip;
-	struct tcphdr *tcp;
-
-	skb = alloc_skb(LL_MAX_HEADER + 60, GFP_ATOMIC);
-	if (skb == NULL)
-		return;
-
-	skb_reserve(skb, LL_MAX_HEADER);
-	skb_reset_network_header(skb);
-	skb_put(skb, 60);
-
-	ip = ip_hdr(skb);
-	ip->ihl = sizeof(*ip) / 4;
-	ip->version = 4;
-	ip->tos = 0;
-	ip->id = 0;
-	ip->frag_off = 0;
-	ip->ttl = 64;
-	ip->protocol = IPPROTO_TCP;
-	ip->check = 0;
-	ip->saddr = c->peer_address;
-	ip->daddr = c->address;
-
-	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
-	tcpr_recover(tcp, &c->tcpr);
-
-	ip->tot_len = htons(sizeof(*ip) + tcp->doff * 4);
-	inject(skb);
+	len = sock_sendmsg(c->sock, &msg, sizeof(packet));
+	if (len < 0 && net_ratelimit())
+		printk(KERN_WARNING "TCPR: error injecting packet\n");
 }
 
 static int tcpr_open(struct inode *inode, struct file *file)
@@ -289,7 +222,8 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (ret)
 			return ret;
 
-		c = connection_create(tc.address, tc.peer_address, tc.port, tc.peer_port);
+		c = connection_create(tc.address, tc.peer_address, tc.port,
+				      tc.peer_port, current->nsproxy->net_ns);
 		if (!c)
 			return -ENOMEM;
 
@@ -315,7 +249,7 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 	case TCPR_ACK:
 		c->tcpr.saved.ack = htonl(ntohl(c->tcpr.saved.ack) + arg);
-		update(c);
+		inject(c, 0);
 		printk(KERN_DEBUG "TCPR_ACK %ld\n", arg);
 		break;
 		
@@ -336,7 +270,7 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case TCPR_KILL:
-		reset(c);
+		inject(c, TCPR_RESET);
 		printk(KERN_DEBUG "TCPR_KILL\n");
 		break;
 
@@ -365,13 +299,14 @@ static long tcpr_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-static unsigned int tcpr_tg_application(struct sk_buff *skb)
+static unsigned int tcpr_tg_application(struct sk_buff *skb, struct net *net_ns)
 {
 	struct iphdr *ip;
 	struct tcphdr *tcp;
 	struct connection *c;
 	unsigned int verdict = NF_DROP;
 	int done;
+	int mode;
 
 	ip = ip_hdr(skb);
 	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
@@ -379,13 +314,13 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb)
 	printk(KERN_DEBUG "TCPR packet from application (syn %d, ack %d, fin %d, rst %d)\n", tcp->syn, tcp->ack, tcp->fin, tcp->rst);
 
 	read_lock(&connections_lock);
-	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest);
+	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest, net_ns);
 	read_unlock(&connections_lock);
 	if (!c) {
 		if (tcp->ack)
 			return NF_DROP;
 		c = connection_create(ip->saddr, ip->daddr,
-				      tcp->source, tcp->dest);
+				      tcp->source, tcp->dest, net_ns);
 		if (!c)
 			return NF_DROP;
 	}
@@ -397,26 +332,11 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb)
 	spin_lock(&c->tcpr_lock);
 	done = c->tcpr.done;
 	printk(KERN_DEBUG "Before filtering, ack = %u (%u)\n", ntohl(c->tcpr.saved.ack), ntohl(c->tcpr.ack));
-	switch (tcpr_filter(&c->tcpr, tcp, ntohs(ip->tot_len) - ip->ihl * 4)) {
-	case TCPR_DELIVER:
-		printk(KERN_DEBUG "Delivering packet.\n");
+	mode = tcpr_filter(&c->tcpr, tcp, ntohs(ip->tot_len) - ip->ihl * 4);
+	if (mode == TCPR_DELIVER)
 		verdict = NF_ACCEPT;
-		break;
-	case TCPR_DROP:
-		printk(KERN_DEBUG "Dropping packet.\n");
-		break;
-	case TCPR_RESET:
-		printk(KERN_DEBUG "Dropping packet and sending RST.\n");
-		reset(c);
-		break;
-	case TCPR_RECOVER:
-		printk(KERN_DEBUG "Dropping packet and sending SYN ACK.\n");
-		recover(c);
-		break;
-	default:
-		printk(KERN_DEBUG "Unknown TCPR response.\n");
-		BUG();
-	}
+	else if (mode != TCPR_DROP)
+		inject(c, mode);
 	if (c->tcpr.done && !done) {
 		printk(KERN_DEBUG "Connection is now done.\n");
 		wake_up_interruptible(&c->wait);
@@ -428,7 +348,7 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb)
 	return verdict;
 }
 
-static unsigned int tcpr_tg_peer(struct sk_buff *skb)
+static unsigned int tcpr_tg_peer(struct sk_buff *skb, struct net *net_ns)
 {
 	struct iphdr *ip;
 	struct tcphdr *tcp;
@@ -442,13 +362,13 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb)
 
 
 	read_lock(&connections_lock);
-	c = lookup_external(ip->daddr, ip->saddr, tcp->dest, tcp->source);
+	c = lookup_external(ip->daddr, ip->saddr, tcp->dest, tcp->source, net_ns);
 	read_unlock(&connections_lock);
 	if (!c) {
 		if (tcp->ack)
 			return NF_DROP;
 		c = connection_create(ip->daddr, ip->saddr,
-				      tcp->dest, tcp->source);
+				      tcp->dest, tcp->source, net_ns);
 		if (!c)
 			return NF_DROP;
 	}
@@ -473,13 +393,14 @@ static unsigned int tcpr_tg(struct sk_buff *skb,
 			    const struct xt_action_param *par)
 {
 	const int *peer = par->targinfo;
+	struct net *net_ns = dev_net(par->in ? par->in : par->out);
 
 	if (!skb_make_writable(skb, skb->len))
 		return NF_DROP;
 	if (*peer)
-		return tcpr_tg_peer(skb);
+		return tcpr_tg_peer(skb, net_ns);
 	else
-		return tcpr_tg_application(skb);
+		return tcpr_tg_application(skb, net_ns);
 }
 
 static struct xt_target tcpr_tg_regs = {
