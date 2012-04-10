@@ -111,20 +111,18 @@ static void inject_ip(struct iphdr *ip, struct sk_buff *oldskb)
 		printk(KERN_DEBUG "TCPR cannot allocate SKB\n");
 		return;
 	}
-
+	
 	skb_reserve(skb, LL_MAX_HEADER);
 	skb_reset_network_header(skb);
 	skb_put(skb, ntohs(ip->tot_len));
 	memcpy(skb->data, ip, ntohs(ip->tot_len));
+	skb->ip_summed = CHECKSUM_NONE;
 	skb_dst_set(skb, dst_clone(skb_dst(oldskb)));
 	if (ip_route_me_harder(skb, RTN_UNSPEC) < 0) {
 		printk(KERN_DEBUG "TCPR cannot route\n");
 		kfree_skb(skb);
 		return;
 	}
-	
-	ip_hdr(skb)->ttl = dst_metric(skb_dst(skb), RTAX_HOPLIMIT);
-	skb->ip_summed = CHECKSUM_NONE;
 	if (skb->len > dst_mtu(skb_dst(skb))) {
 		printk(KERN_DEBUG "TCPR generated packet that would fragment\n");
 		kfree_skb(skb);
@@ -173,9 +171,9 @@ static void inject_tcp(struct connection *c, enum tcpr_verdict tcpr_verdict, str
 	packet.ip.tot_len = htons(sizeof(packet.ip) + packet.tcp.doff * 4);
         packet.ip.check = ip_fast_csum(&packet.ip, packet.ip.ihl);
 	packet.tcp.check = csum_tcpudp_magic(packet.ip.saddr, packet.ip.daddr,
-					     sizeof(packet.tcp), IPPROTO_TCP,
+					     packet.tcp.doff * 4, IPPROTO_TCP,
 					     csum_partial(&packet.tcp,
-							  sizeof(packet.tcp),
+							  packet.tcp.doff * 4,
 							  0));
 
 	inject_ip(&packet.ip, oldskb);
@@ -202,7 +200,6 @@ static void inject_update(struct iphdr *ip, struct udphdr *udp, struct tcpr_ip4 
 	packet.udp.source = udp->dest;
 	packet.udp.dest = udp->source;
 	packet.udp.len = htons(sizeof(packet.udp) + sizeof(packet.state));
-	packet.udp.check = 0;
 	memcpy(&packet.state, state, sizeof(packet.state));
 	inject_ip(&packet.ip, oldskb);
 }
