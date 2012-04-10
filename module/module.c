@@ -130,7 +130,7 @@ static int inject_ip(struct net *net_ns, struct iphdr *ip)
 	return dst_output(skb);
 }
 
-static void inject(struct connection *c, enum tcpr_verdict tcpr_verdict)
+static void inject_tcp(struct connection *c, enum tcpr_verdict tcpr_verdict)
 {
 	struct {
 		struct iphdr ip;
@@ -174,6 +174,32 @@ static void inject(struct connection *c, enum tcpr_verdict tcpr_verdict)
 	inject_ip(c->net_ns, &packet.ip);
 }
 
+static void inject_update(struct net *net_ns, struct iphdr *ip,
+			  struct udphdr *udp, struct tcpr_ip4 *state)
+{
+	struct {
+		struct iphdr ip;
+		struct udphdr udp;
+		struct tcpr_ip4 state;
+	} packet;
+
+	memset(&packet, 0, sizeof(packet));
+	packet.ip.ihl = sizeof(packet.ip) / 4;
+	packet.ip.version = 4;
+	packet.ip.ttl = 64;
+	packet.ip.protocol = IPPROTO_UDP;
+	packet.ip.tot_len = htons(sizeof(packet));
+        packet.ip.check = ip_fast_csum(&packet.ip, packet.ip.ihl);
+	packet.ip.saddr = ip->daddr;
+	packet.ip.daddr = ip->saddr;
+	packet.udp.source = udp->dest;
+	packet.udp.dest = udp->source;
+	packet.udp.len = htons(sizeof(packet.udp) + sizeof(packet.state));
+	packet.udp.check = 0;
+	memcpy(&packet.state, state, sizeof(packet.state));
+	inject_ip(net_ns, &packet.ip);
+}
+
 static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 {
 	struct iphdr *ip;
@@ -181,9 +207,6 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 	struct tcpr_ip4 *update;
 	struct connection *c;
 	enum tcpr_verdict tcpr_verdict;
-	unsigned int verdict = NF_DROP;
-	uint32_t tmp_addr;
-	uint16_t tmp_port;
 
 	ip = ip_hdr(skb);
 	if (ip->protocol != IPPROTO_UDP)
@@ -199,32 +222,32 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 			    net_ns);
 	read_unlock(&connections_lock);
 	if (!c) {
+		printk(KERN_DEBUG "Connection not found, creating one.\n");
 		c = connection_create(update->address, update->peer_address,
 				      update->tcpr.hard.port,
 				      update->tcpr.hard.peer.port, net_ns);
 		if (!c)
 			return NF_DROP;
 	}
+	printk(KERN_DEBUG "Have connection %x:%d (current %d) %x:%d.\n", ntohl(c->state.address), ntohs(c->state.tcpr.hard.port), ntohs(c->state.tcpr.port), ntohl(c->state.peer_address), ntohs(c->state.tcpr.hard.peer.port));
 
 	spin_lock(&c->tcpr_lock);
 	tcpr_verdict = tcpr_update(&c->state.tcpr, &update->tcpr);
 	if (tcpr_verdict == TCPR_DELIVER) {
-		tmp_addr = ip->saddr;
-		tmp_port = udp->source;
-		ip->saddr = ip->daddr;
-		udp->dest = udp->source;
-		ip->daddr = tmp_addr;
-		udp->source = tmp_port;
-		udp->check = 0;
-		ip_route_me_harder(skb, AF_INET);
-		verdict = NF_ACCEPT;
+		printk(KERN_DEBUG "Answering update.\n");
+		inject_update(net_ns, ip, udp, update);
 	} else if (tcpr_verdict != TCPR_DROP) {
-		inject(c, tcpr_verdict);
+		printk(KERN_DEBUG "Injecting packet of verdict %d\n", tcpr_verdict);
+		inject_tcp(c, tcpr_verdict);
+	} else {
+		printk(KERN_DEBUG "Dropping update.\n");
 	}
-	if (c->state.tcpr.done)
+	if (c->state.tcpr.done) {
+		printk(KERN_DEBUG "Connection is done.\n");
 		connection_done(c);
+	}
 	spin_unlock(&c->tcpr_lock);
-	return verdict;
+	return NF_DROP;
 }
 
 static unsigned int tcpr_tg_application(struct sk_buff *skb, struct net *net_ns)
@@ -252,7 +275,7 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb, struct net *net_ns)
 	if (tcpr_verdict == TCPR_DELIVER)
 		verdict = NF_ACCEPT;
 	else if (tcpr_verdict != TCPR_DROP)
-		inject(c, tcpr_verdict);
+		inject_tcp(c, tcpr_verdict);
 	if (c->state.tcpr.done)
 		connection_done(c);
 	spin_unlock(&c->tcpr_lock);
@@ -290,7 +313,7 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb, struct net *net_ns)
 	if (tcpr_verdict == TCPR_DELIVER)
 		verdict = NF_ACCEPT;
 	else if (tcpr_verdict != TCPR_DROP)
-		inject(c, tcpr_verdict);
+		inject_tcp(c, tcpr_verdict);
 	if (c->state.tcpr.done)
 		connection_done(c);
 	spin_unlock(&c->tcpr_lock);

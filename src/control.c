@@ -152,42 +152,6 @@ static void setup(void)
 	recv(tcpr_sock, &state, sizeof(state), 0);
 }
 
-static void update(void)
-{
-	int fd;
-
-	if (recovery_file) {
-		fd = open(recovery_file, O_RDONLY);
-		if (fd < 0) {
-			perror("Opening recovery file");
-			exit(EXIT_FAILURE);
-		}
-		if (read(fd, &state.tcpr.hard, sizeof(state.tcpr.hard)) != sizeof(state.tcpr.hard)) {
-			perror("Recovering");
-			exit(EXIT_FAILURE);
-		}
-		if (close(fd) < 0) {
-			perror("Closing recovery file");
-			exit(EXIT_FAILURE);
-		}
-	}
-
-	if (done_writing)
-		state.tcpr.hard.done_writing = 1;
-	if (done_reading)
-		state.tcpr.hard.done_reading = 1;
-	if (done)
-		state.tcpr.done = 1;
-	if (saved_bytes > 0)
-		state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + saved_bytes);
-	if (kill)
-		state.tcpr.failed = 1;
-
-	send(tcpr_sock, &state, sizeof(state), 0);
-	if (saved_bytes <= 0 || !kill)
-		recv(tcpr_sock, &state, sizeof(state), 0);
-}
-
 static void print(void)
 {
 	if (state.tcpr.hard.port)
@@ -225,7 +189,7 @@ static void print(void)
 	printf("%12" PRIu16 "  Peer WIN\n", ntohs(state.tcpr.peer.win));
 }
 
-static void teardown(void)
+static void update(void)
 {
 	int fd;
 
@@ -245,6 +209,38 @@ static void teardown(void)
 		}
 	}
 
+	if (recovery_file) {
+		fd = open(recovery_file, O_RDONLY);
+		if (fd < 0) {
+			perror("Opening recovery file");
+			exit(EXIT_FAILURE);
+		}
+		if (read(fd, &state.tcpr.hard, sizeof(state.tcpr.hard)) != sizeof(state.tcpr.hard)) {
+			perror("Recovering");
+			exit(EXIT_FAILURE);
+		}
+		if (close(fd) < 0) {
+			perror("Closing recovery file");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+	if (done_writing)
+		state.tcpr.hard.done_writing = 1;
+	if (done_reading)
+		state.tcpr.hard.done_reading = 1;
+	if (done)
+		state.tcpr.done = 1;
+	if (saved_bytes > 0)
+		state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + saved_bytes);
+	if (kill)
+		state.tcpr.failed = 1;
+
+	send(tcpr_sock, &state, sizeof(state), 0);
+}
+
+static void teardown(void)
+{
 	if (close(tcpr_sock) < 0) {
 		perror("Closing TCPR handle");
 		exit(EXIT_FAILURE);
@@ -255,8 +251,8 @@ int main(int argc, char **argv)
 {
 	handle_options(argc, argv);
 	setup();
-	update();
 	print();
+	update();
 	teardown();
 	return EXIT_SUCCESS;
 }
