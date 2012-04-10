@@ -14,7 +14,7 @@ static uint32_t shorten(uint32_t n)
 
 enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 {
-	uint32_t sum = h->check ^ 0xffff;
+	uint32_t check = h->check ^ 0xffff;
 	uint8_t *end = (uint8_t *)((uint32_t *)h + h->doff);
 	uint8_t *opt = (uint8_t *)(h + 1);
 	uint8_t *tmp;
@@ -38,13 +38,15 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 			break;
 		}
 
-	if (h->rst)
+	if (h->rst) {
+		t->failed = 1;
 		return TCPR_DROP;
+	}
 
-	if (t->saved.external_port) {
-		sum += (uint16_t)~h->source;
-		h->source = t->saved.external_port;
-		sum += h->source;
+	if (t->hard.port) {
+		check += (uint16_t)~h->source;
+		h->source = t->hard.port;
+		check += h->source;
 	}
 
 	t->win = h->window;
@@ -53,56 +55,57 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 	if (h->fin) {
 		t->fin = htonl(ntohl(t->seq) + 1 - t->delta);
 		t->have_fin = 1;
+		if (!t->hard.done_writing)
+			t->failed = 1;
 	}
 
-	if (h->syn) {
-		if (h->ack) {
-			t->saved.safe = htonl(ntohl(h->seq) + 1);
-		} else if (!t->peer.have_ack) {
-			t->saved.internal_port = h->source;
-			if (!t->saved.external_port)
-				t->saved.external_port = h->source;
-			t->saved.peer.port = h->dest;
-			if (h->check)
-				h->check = ~shorten(shorten(sum));
-			return TCPR_DELIVER;
-		} else {
+	if (!h->ack) {
+		t->failed = 0;
+		if (t->peer.have_ack) {
 			t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
-			t->saved.done_writing = 0;
+			t->hard.done_writing = 0;
 			t->have_fin = 0;
 			return TCPR_RECOVER;
+		} else {
+			t->port = h->source;
+			if (!t->hard.port)
+				t->hard.port = h->source;
+			t->hard.peer.port = h->dest;
+			if (h->check)
+				h->check = ~shorten(shorten(check));
+			return TCPR_DELIVER;
 		}
 	}
 
-	if (t->have_fin && !t->saved.done_writing)
+	if (t->failed)
 		return TCPR_RESET;
 
 	t->ack = h->ack_seq;
-	if (t->saved.done_reading) {
-		t->saved.ack = t->ack;
+	if (t->hard.done_reading) {
+		t->hard.ack = t->ack;
 		if (t->have_fin && t->peer.have_fin && t->peer.have_ack
-		    && t->peer.ack == t->fin && t->peer.fin == t->saved.ack)
+		    && t->peer.ack == t->fin && t->peer.fin == t->hard.ack)
 			t->done = 1;
-	} else if (h->ack_seq != t->saved.ack) {
+	} else if (h->ack_seq != t->hard.ack) {
 		if (size == (size_t)h->doff * 4)
 			return TCPR_DROP;
-		sum += shorten(~h->ack_seq);
-		h->ack_seq = t->saved.ack;
-		sum += shorten(h->ack_seq);
+		check += shorten(~h->ack_seq);
+		h->ack_seq = t->hard.ack;
+		check += shorten(h->ack_seq);
 	}
 
-	sum += shorten(~h->seq);
+	check += shorten(~h->seq);
 	h->seq = htonl(ntohl(h->seq) - t->delta);
-	sum += shorten(h->seq);
+	check += shorten(h->seq);
 
 	if (h->check)
-		h->check = ~shorten(shorten(sum));
+		h->check = ~shorten(shorten(check));
 	return TCPR_DELIVER;
 }
 
-void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
+enum tcpr_verdict tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 {
-	uint32_t sum = h->check ^ 0xffff;
+	uint32_t check = h->check ^ 0xffff;
 	uint8_t *end = (uint8_t *)((uint32_t *)h + h->doff);
 	uint8_t *opt = (uint8_t *)(h + 1);
 	uint8_t *tmp;
@@ -114,15 +117,15 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 			opt++;
 			break;
 		case TCPOPT_MSS:
-			t->saved.peer.mss = (uint16_t)opt[2] << 8 | opt[3];
+			t->hard.peer.mss = (uint16_t)opt[2] << 8 | opt[3];
 			opt += opt[1];
 			break;
 		case TCPOPT_WINDOW:
-			t->saved.peer.ws = opt[2] + 1;
+			t->hard.peer.ws = opt[2] + 1;
 			opt += opt[1];
 			break;
 		case TCPOPT_SACK_PERM:
-			t->saved.peer.sack_permitted = 1;
+			t->hard.peer.sack_permitted = 1;
 			opt += opt[1];
 			break;
 		case TCPOPT_SACK:
@@ -149,21 +152,19 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 			break;
 		}
 
-	if (t->saved.internal_port) {
-		sum += (uint16_t)~h->dest;
-		h->dest = t->saved.internal_port;
-		sum += h->dest;
+	if (t->port) {
+		check += (uint16_t)~h->dest;
+		h->dest = t->port;
+		check += h->dest;
 	}
 
 	t->peer.win = h->window;
 
 	if (h->syn) {
-		t->saved.internal_port = h->dest;
-		t->saved.external_port = h->dest;
-		t->saved.peer.port = h->source;
-		t->saved.ack = htonl(ntohl(h->seq) + 1);
-		if (h->ack)
-			t->saved.safe = h->ack_seq;
+		t->port = h->dest;
+		t->hard.port = h->dest;
+		t->hard.peer.port = h->source;
+		t->hard.ack = htonl(ntohl(h->seq) + 1);
 	}
 
 	if (h->fin) {
@@ -175,17 +176,58 @@ void tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size)
 		if (!h->rst) {
 			t->peer.ack = h->ack_seq;
 			t->peer.have_ack = 1;
-			if (t->have_fin && t->peer.have_fin && t->peer.ack == t->fin && t->peer.fin == t->saved.ack)
+			if (t->have_fin && t->peer.have_fin && t->peer.ack == t->fin && t->peer.fin == t->hard.ack)
 				t->done = 1;
 		}
 
-		sum += shorten(~h->ack_seq);
+		check += shorten(~h->ack_seq);
 		h->ack_seq = htonl(ntohl(h->ack_seq) + t->delta);
-		sum += shorten(h->ack_seq);
+		check += shorten(h->ack_seq);
 	}
 
 	if (h->check)
-		h->check = ~shorten(shorten(sum));
+		h->check = ~shorten(shorten(check));
+
+	return t->failed ? TCPR_DROP : TCPR_DELIVER;
+}
+
+enum tcpr_verdict tcpr_update(struct tcpr *t, struct tcpr *u)
+{
+	uint32_t ack = t->hard.ack;
+
+	if (!u->port) {
+		memcpy(u, t, sizeof(*u));
+		return TCPR_DELIVER;
+	}
+
+	memcpy(&t->hard, &u->hard, sizeof(t->hard));
+	t->port = u->port;
+	t->done = u->done;
+	t->failed = u->failed;
+	if (t->hard.ack != ack)
+		return TCPR_ACKNOWLEDGE;
+	if (u->failed)
+		return TCPR_RESET;
+	return TCPR_DROP;
+}
+
+void tcpr_acknowledge(struct tcphdr *h, struct tcpr *t)
+{
+	if (t->hard.done_reading) {
+		t->hard.ack = t->ack;
+		if (t->have_fin && t->peer.have_fin && t->peer.have_ack
+		    && t->peer.ack == t->fin && t->peer.fin == t->hard.ack)
+			t->done = 1;
+	}
+
+	memset(h, 0, sizeof(*h));
+	h->source = t->hard.port;
+	h->dest = t->hard.peer.port;
+	h->seq = htonl(ntohl(t->seq) - t->delta);
+	h->ack_seq = t->hard.ack;
+	h->doff = sizeof(*h) / 4;
+	h->ack = 1;
+	h->window = t->win;
 }
 
 void tcpr_recover(struct tcphdr *h, struct tcpr *t)
@@ -194,29 +236,29 @@ void tcpr_recover(struct tcphdr *h, struct tcpr *t)
 	size_t i = 0;
 
 	memset(h, 0, sizeof(*h));
-	h->source = t->saved.peer.port;
-	h->dest = t->saved.internal_port;
-	h->seq = htonl(ntohl(t->saved.ack) - 1);
+	h->source = t->hard.peer.port;
+	h->dest = t->port;
+	h->seq = htonl(ntohl(t->hard.ack) - 1);
 	h->ack_seq = t->seq;
 	h->doff = sizeof(*h) / 4;
 	h->syn = 1;
 	h->ack = 1;
 	h->window = t->peer.win;
 
-	if (t->saved.peer.mss) {
+	if (t->hard.peer.mss) {
 		opt[i++] = TCPOPT_MSS;
 		opt[i++] = 4;
-		opt[i++] = t->saved.peer.mss >> 8;
-		opt[i++] = t->saved.peer.mss & 0xff;
+		opt[i++] = t->hard.peer.mss >> 8;
+		opt[i++] = t->hard.peer.mss & 0xff;
 	}
 
-	if (t->saved.peer.ws) {
+	if (t->hard.peer.ws) {
 		opt[i++] = TCPOPT_WINDOW;
 		opt[i++] = 3;
-		opt[i++] = t->saved.peer.ws - 1;
+		opt[i++] = t->hard.peer.ws - 1;
 	}
 
-	if (t->saved.peer.sack_permitted) {
+	if (t->hard.peer.sack_permitted) {
 		opt[i++] = TCPOPT_SACK_PERM;
 		opt[i++] = 2;
 	}
@@ -226,32 +268,12 @@ void tcpr_recover(struct tcphdr *h, struct tcpr *t)
 	h->doff += (i + 3) / 4;
 }
 
-void tcpr_update(struct tcphdr *h, struct tcpr *t)
-{
-	if (t->saved.done_reading) {
-		t->saved.ack = t->ack;
-		if (t->have_fin && t->peer.have_fin && t->peer.have_ack
-		    && t->peer.ack == t->fin && t->peer.fin == t->saved.ack)
-			t->done = 1;
-	}
-
-	memset(h, 0, sizeof(*h));
-	h->source = t->saved.external_port;
-	h->dest = t->saved.peer.port;
-	h->seq = htonl(ntohl(t->seq) - t->delta);
-	h->ack_seq = t->saved.ack;
-	h->doff = sizeof(*h) / 4;
-	h->ack = 1;
-	h->window = t->win;
-}
-
 void tcpr_reset(struct tcphdr *h, struct tcpr *t)
 {
 	memset(h, 0, sizeof(*h));
-	h->source = t->saved.peer.port;
-	h->dest = t->saved.internal_port;
+	h->source = t->hard.peer.port;
+	h->dest = t->port;
 	h->seq = t->ack;
 	h->doff = sizeof(*h) / 4;
 	h->rst = 1;
-	h->window = t->peer.win;
 }

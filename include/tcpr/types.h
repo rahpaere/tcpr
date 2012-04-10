@@ -7,28 +7,27 @@
 #include <stdint.h>
 #endif
 
-struct tcpr_saved {
-	uint16_t internal_port;
-	uint16_t external_port;
-	uint32_t ack;
-	uint32_t safe;
+struct tcpr_hard {
+	uint16_t port;
 	struct {
 		uint16_t port;
 		uint16_t mss;
 		uint8_t ws;
 		uint8_t sack_permitted;
 	} peer;
+	uint32_t ack;
 	uint8_t done_reading;
 	uint8_t done_writing;
 };
 
 struct tcpr {
-	struct tcpr_saved saved;
+	struct tcpr_hard hard;
 	uint32_t delta;
 	uint32_t ack;
 	uint32_t fin;
 	uint32_t seq;
 	uint16_t win;
+	uint16_t port;
 	struct {
 		uint32_t ack;
 		uint32_t fin;
@@ -38,6 +37,13 @@ struct tcpr {
 	} peer;
 	uint8_t have_fin;
 	uint8_t done;
+	uint8_t failed;
+};
+
+struct tcpr_ip4 {
+	uint32_t address;
+	uint32_t peer_address;
+	struct tcpr tcpr;
 };
 
 #endif
