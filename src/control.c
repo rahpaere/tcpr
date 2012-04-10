@@ -17,6 +17,7 @@
 static char *tcpr_address;
 static char *bind_address;
 static char *connect_address;
+static char *current_port;
 
 static const char *save_file;
 static const char *recovery_file;
@@ -26,6 +27,7 @@ static int done_reading;
 static int done_writing;
 static int done;
 static int kill;
+static int updates;
 
 static struct tcpr_ip4 state;
 
@@ -41,6 +43,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b [HOST:]PORT  The application is bound to HOST:PORT.\n");
 	fprintf(stderr, "  -c [HOST:]PORT  The application is connected to HOST:PORT.\n");
 	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
+	fprintf(stderr, "  -p PORT         The application has rebound to PORT.\n");
 	fprintf(stderr, "  -s FILE         Save the connection state into FILE.\n");
 	fprintf(stderr, "  -r FILE         Recover the connection state from FILE.\n");
 	fprintf(stderr, "  -i NUM          Acknowledge NUM bytes of input.\n");
@@ -55,7 +58,7 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "b:c:t:s:r:i:d:k?")) {
+		switch (getopt(argc, argv, "b:c:t:p:s:r:i:d:k?")) {
 		case 'b':
 			bind_address = optarg;
 			break;
@@ -65,14 +68,19 @@ static void handle_options(int argc, char **argv)
 		case 't':
 			tcpr_address = optarg;
 			break;
+		case 'p':
+			current_port = optarg;
+			break;
 		case 's':
 			save_file = optarg;
 			break;
 		case 'r':
 			recovery_file = optarg;
+			updates = 1;
 			break;
 		case 'i':
 			saved_bytes = atoi(optarg);
+			updates = 1;
 			break;
 		case 'd':
 			if (strcmp(optarg, "done") == 0)
@@ -81,9 +89,11 @@ static void handle_options(int argc, char **argv)
 				done_reading = 1;
 			else if (strcmp(optarg, "writing") == 0)
 				done_writing = 1;
+			updates = 1;
 			break;
 		case 'k':
 			kill = 1;
+			updates = 1;
 			break;
 		case -1:
 			return;
@@ -191,6 +201,7 @@ static void print(void)
 
 static void update(void)
 {
+	struct sockaddr_in sa;
 	int fd;
 
 	if (save_file) {
@@ -225,6 +236,17 @@ static void update(void)
 		}
 	}
 
+	if (current_port) {
+		lookup(current_port, SOCK_STREAM, IPPROTO_TCP, &sa);
+		if (state.tcpr.port != sa.sin_port) {
+			state.tcpr.port = sa.sin_port;
+			updates = 1;
+		}
+	} else if (!state.tcpr.port) {
+		state.tcpr.port = state.tcpr.hard.port;
+		updates = 1;
+	}
+
 	if (done_writing)
 		state.tcpr.hard.done_writing = 1;
 	if (done_reading)
@@ -235,8 +257,8 @@ static void update(void)
 		state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + saved_bytes);
 	if (kill)
 		state.tcpr.failed = 1;
-
-	send(tcpr_sock, &state, sizeof(state), 0);
+	if (updates)
+		send(tcpr_sock, &state, sizeof(state), 0);
 }
 
 static void teardown(void)
