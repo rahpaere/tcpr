@@ -158,8 +158,14 @@ static void setup(void)
 		exit(EXIT_FAILURE);
 	}
 
-	send(tcpr_sock, &state, sizeof(state), 0);
-	recv(tcpr_sock, &state, sizeof(state), 0);
+	if (send(tcpr_sock, &state, sizeof(state), 0) < 0) {
+		perror("Sending update request");
+		exit(EXIT_FAILURE);
+	}
+	if (recv(tcpr_sock, &state, sizeof(state), 0) < 0) {
+		perror("Receiving update");
+		exit(EXIT_FAILURE);
+	}
 }
 
 static void print(void)
@@ -257,8 +263,10 @@ static void update(void)
 		state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + saved_bytes);
 	if (kill)
 		state.tcpr.failed = 1;
-	if (updates)
-		send(tcpr_sock, &state, sizeof(state), 0);
+	if (updates && send(tcpr_sock, &state, sizeof(state), 0) < 0) {
+		perror("Sending update");
+		exit(EXIT_FAILURE);
+	}
 }
 
 static void teardown(void)
