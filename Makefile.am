@@ -1,8 +1,8 @@
-EXTRA_DIST = LICENSE
+EXTRA_DIST = LICENSE module/Makefile module/module.c module/filter.c
 
 AM_CFLAGS = -Wall -Wextra -I$(srcdir)/include
 
-xtablesdir = $(prefix)/lib/xtables
+xtablesdir = /lib/xtables
 xtables_LTLIBRARIES = libxt_TCPR.la
 libxt_TCPR_la_SOURCES = module/libxt_TCPR.c
 libxt_TCPR_la_LIBADD = -lxtables
