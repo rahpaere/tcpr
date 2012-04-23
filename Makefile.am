@@ -1,5 +1,3 @@
-SUBDIRS = module
-
 EXTRA_DIST = LICENSE
 
 AM_CFLAGS = -Wall -Wextra -I$(srcdir)/include
