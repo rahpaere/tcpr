@@ -10,93 +10,55 @@ set up some infrastructure:
 
   $ autoreconf -i
 
-The filter depends on the `libnfnetlink' and `libnetfilter_queue'
-libraries and development headers, which can be installed on an Ubuntu
-machine with:
-
-  # apt-get install libnetfilter-queue-dev
-
-The following examples also assume you have some common system
-administration utilities installed:
-
-  # apt-get install iptables iproute
-
-Finally, the following are often useful for testing and debugging:
-
-  # apt-get install wireshark tshark socat
-
-Once the dependencies are installed, build the project.
+Then, you can build the userspace programs and iptables extension library.
 
   $ mkdir tcpr-build
   $ cd tcpr-build
-  $ ../tcpr/configure && make
+  $ ../tcpr/configure
+  $ make
+  # make install
 
-The packet filter program, `tcpr-filter', requires some special privileges
-to run.
+The kernel module must be built separately, using the kernel build system.
 
-  # setcap cap_net_admin,cap_net_raw,cap_sys_nice+eip tcpr-filter
+  $ cd module
+  $ make
+  # make install
 
-Whenever you rebuild tcpr-filter, the overwritten file will lose its
-capabilities and you will need to set them again.  However, you will be
-able to run the filter as an unprivileged user.
+Once the module is installed, load it into the kernel.
+
+  # modprobe tcpr
+
+Set up firewall rules to match traffic and updates.  For example, assume
+the application is bound to 10.0.0.1 and its traffic flows through the
+filter (perhaps it is in a virtual machine with bridged networking).
+
+  # iptables -t mangle -A FORWARD -d 10.0.0.1/32 -p tcp -j TCPR --peer
+  # iptables -t mangle -A FORWARD -s 10.0.0.1/32 -p tcp -j TCPR 
+  # iptables -t mangle -A FORWARD -s 10.0.0.1/32 -p udp -j TCPR 
 
 The `tcpr-chat' program can run as an application or its peer, with either
 endpoint initiating the connection.  Both endpoints pipe their standard
-input and output through the network connection.  The distribution
-includes a script to install appropriate rules in the firewall.
+input and output through the network connection.
 
-  # tcpr-setup-iptables
+Run the application as a server.  For the TCPR address, anything that
+matches the UDP firewall rule above is acceptable.
 
-Now run the filter.
+  $ tcpr-chat -b 9999 -t 10.0.0.2:7777
 
-  $ tcpr-filter
+On another machine (or virtual machine), run the peer as a client.
 
-In its own terminal, run the peer as a server.
-
-  $ tcpr-chat -P
-
-In yet another terminal, run the application as a client.
-
-  $ tcpr-chat
+  $ tcpr-chat -b 10.0.0.2:8888 -c 10.0.0.1:9999
 
 Now chat back and forth between the two endpoints.  You can kill the
 fault-tolerant application with control-C.  You can then recover by
-running the application again as the client.
+running the application again as a client.
 
-  $ tcpr-chat
+  $ tcpr-chat -b 10.0.0.1:9999 -c 10.0.0.2:8888 -t 10.0.0.2:7777
 
-You can also kill and recover the filter in the same way, or even kill
-both and recover them simultaneously.  When you are finished at either
-endpoint, type control-D.  When both ends have finished, they will exit.
-Finally, kill the filter.
+You can also use `tcpr-control' to inspect the state held by the filter
+for a particular connection.
 
-The setup script has replaced the firewall's original configuration,
-but saved it in a file in the working directory.  To clean up when you
-are finished, there is a script to restore the firewall.
+  $ tcpr-control -b 10.0.0.1:9999 -c 10.0.0.2:8888 -t 10.0.0.2:7777
 
-  # tcpr-restore-iptables
-
-To get a closer look at what is happening during a demonstration,
-or to debug a problem, you can run the filter with the `-l' option,
-which causes it to dump packet traces from both internal and external
-perspectives.  It can also be useful to set up another terminal to
-watch the state various connections are in with `netstat'.
-
-Another useful utility is `tcpr-control', which prints out a
-human-readable representation of TCPR's state for the connection, and can
-also be used to manipulate state on behalf of a broken or non-TCPR-aware
-application.  If the application crashes but you move on to something
-else without recovering and closing gracefully, its old state might
-confuse the application into recovering when you mean to establish a
-fresh connection; you can remove it with `tcpr-control -D'.
-
-The final program is `tcpr-benchmark', which connects to a peer's echo
-service and deliberately fails and recovers many connections in order
-to benchmark recovery time.  Other benchmarks, such as throughput and
-latency, can be measured using `tcpr-chat' and inspecting packet traces
-using Wireshark.
-
-The `examples' subdirectory contains some very simple programs to
-demonstrate the use of TCPR.  The `tcpr-chat' program is another,
-slightly larger, example.  Both are useful for learning to write your
-own applications using TCPR.
+The source code for `tcpr-chat', in `src/chat.c', provides an example
+of the UDP protocol used to write a TCPR-aware application.
