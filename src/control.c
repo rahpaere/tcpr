@@ -263,9 +263,13 @@ static void update(void)
 		state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + saved_bytes);
 	if (kill)
 		state.tcpr.failed = 1;
-	if (updates && send(tcpr_sock, &state, sizeof(state), 0) < 0) {
-		perror("Sending update");
-		exit(EXIT_FAILURE);
+	if (updates) {
+		if (send(tcpr_sock, &state, sizeof(state), 0) < 0) {
+			perror("Sending update");
+			exit(EXIT_FAILURE);
+		}
+		printf("\n");
+		print();
 	}
 }
 
