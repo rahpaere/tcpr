@@ -228,6 +228,11 @@ static void setup_tcpr(void)
 
 	send(tcpr_sock, &state, sizeof(state), 0);
 	recv(tcpr_sock, &state, sizeof(state), 0);
+
+	if (!checkpointing) {
+		state.tcpr.hard.done_reading = 1;
+		send(tcpr_sock, &state, sizeof(state), 0);
+	}
 }
 
 static void handle_events(void)
