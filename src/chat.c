@@ -275,7 +275,6 @@ static void handle_events(void)
 				if (tcpr_address) {
 					state.tcpr.hard.done_reading = 1;
 					send(tcpr_sock, &state, sizeof(state), 0);
-					recv(tcpr_sock, &state, sizeof(state), 0);
 				}
 				shutdown(sock, SHUT_RD);
 				peer_eof = 1;
@@ -293,7 +292,6 @@ static void handle_events(void)
 					if (tcpr_address) {
 						state.tcpr.hard.done_writing = 1;
 						send(tcpr_sock, &state, sizeof(state), 0);
-						recv(tcpr_sock, &state, sizeof(state), 0);
 					}
 					shutdown(sock, SHUT_WR);
 				}
@@ -317,7 +315,6 @@ static void handle_events(void)
 					if (tcpr_address) {
 						state.tcpr.hard.done_writing = 1;
 						send(tcpr_sock, &state, sizeof(state), 0);
-						recv(tcpr_sock, &state, sizeof(state), 0);
 					}
 					shutdown(sock, SHUT_WR);
 				}
