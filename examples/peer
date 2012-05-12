@@ -1,0 +1,2 @@
+#! /bin/sh
+ip netns exec peer tcpr-chat -b 10.0.0.2:9999 -c 10.0.0.1:8888

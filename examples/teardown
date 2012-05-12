@@ -1,0 +1,8 @@
+#! /bin/sh
+
+ip link delete application
+ip link delete peer
+ip netns delete application
+ip netns delete peer
+ip link set tcpr down
+brctl delbr tcpr

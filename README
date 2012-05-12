@@ -12,8 +12,8 @@ set up some infrastructure:
 
 Then, you can build the userspace programs and iptables extension library.
 
-  $ mkdir tcpr-build
-  $ cd tcpr-build
+  $ mkdir ../tcpr-build
+  $ cd ../tcpr-build
   $ ../tcpr/configure
   $ make
   # make install
@@ -28,37 +28,14 @@ Once the module is installed, load it into the kernel.
 
   # modprobe tcpr
 
-Set up firewall rules to match traffic and updates.  For example, assume
-the application is bound to 10.0.0.1 and its traffic flows through the
-filter (perhaps it is in a virtual machine with bridged networking).
-
-  # iptables -t mangle -A FORWARD -d 10.0.0.1/32 -p tcp -j TCPR --peer
-  # iptables -t mangle -A FORWARD -s 10.0.0.1/32 -p tcp -j TCPR 
-  # iptables -t mangle -A FORWARD -s 10.0.0.1/32 -p udp -j TCPR 
-
-The `tcpr-chat' program can run as an application or its peer, with either
-endpoint initiating the connection.  Both endpoints pipe their standard
-input and output through the network connection.
-
-Run the application as a server.  For the TCPR address, anything that
-matches the UDP firewall rule above is acceptable.
-
-  $ tcpr-chat -b 9999 -t 10.0.0.2:7777
-
-On another machine (or virtual machine), run the peer as a client.
-
-  $ tcpr-chat -b 10.0.0.2:8888 -c 10.0.0.1:9999
-
-Now chat back and forth between the two endpoints.  You can kill the
-fault-tolerant application with control-C.  You can then recover by
-running the application again as a client.
-
-  $ tcpr-chat -b 10.0.0.1:9999 -c 10.0.0.2:8888 -t 10.0.0.2:7777
-
-You can also use `tcpr-control' to inspect the state held by the filter
-for a particular connection.
-
-  $ tcpr-control -b 10.0.0.1:9999 -c 10.0.0.2:8888 -t 10.0.0.2:7777
-
-The source code for `tcpr-chat', in `src/chat.c', provides an example
-of the UDP protocol used to write a TCPR-aware application.
+The scripts in the `examples' directory provide a simple demonstration
+of TCPR.  First, inspect the `setup' script, then run it to provide some
+infrastructure for running the example application and peer in their own
+lightweight virtual network, with the host acting as ethernet bridge and
+filtering all TCP traffic through TCPR.  Then, in one terminal run the
+`application' script, and in another run the `peer'.  Type messages to
+chat back and forth.  Kill the application with control-c, and recover
+it with the `recover' script.  Finally, end the connection gracefully
+with control-d at each endpoint, and run `teardown' to release the
+infrastructure.  The scripts and the source code for the `tcpr-chat'
+program constitute a working guide to setting up and using TCPR.
