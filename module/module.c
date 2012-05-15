@@ -105,10 +105,10 @@ static void inject_ip(struct iphdr *ip, struct sk_buff *oldskb)
 {
 	struct sk_buff *skb;
 
-	printk(KERN_DEBUG "TCPR inject_ip %d + %d bytes\n", LL_MAX_HEADER, ntohs(ip->tot_len));
 	skb = alloc_skb(LL_MAX_HEADER + ntohs(ip->tot_len), GFP_ATOMIC);
 	if (skb == NULL) {
-		printk(KERN_DEBUG "TCPR cannot allocate SKB\n");
+		if (net_ratelimit())
+			printk(KERN_DEBUG "TCPR cannot allocate SKB\n");
 		return;
 	}
 	
@@ -119,12 +119,14 @@ static void inject_ip(struct iphdr *ip, struct sk_buff *oldskb)
 	skb->ip_summed = CHECKSUM_NONE;
 	skb_dst_set(skb, dst_clone(skb_dst(oldskb)));
 	if (ip_route_me_harder(skb, RTN_UNSPEC) < 0) {
-		printk(KERN_DEBUG "TCPR cannot route\n");
+		if (net_ratelimit())
+			printk(KERN_DEBUG "TCPR cannot route\n");
 		kfree_skb(skb);
 		return;
 	}
 	if (skb->len > dst_mtu(skb_dst(skb))) {
-		printk(KERN_DEBUG "TCPR generated packet that would fragment\n");
+		if (net_ratelimit())
+			printk(KERN_DEBUG "TCPR generated packet that would fragment\n");
 		kfree_skb(skb);
 		return;
 	}
@@ -148,21 +150,18 @@ static void inject_tcp(struct connection *c, enum tcpr_verdict tcpr_verdict, str
 
 	switch (tcpr_verdict) {
 	case TCPR_RESET:
-		printk(KERN_DEBUG "TCPR reset\n");
 		tcpr_reset(&packet.tcp, &c->state.tcpr);
 		packet.ip.saddr = c->state.peer_address;
 		packet.ip.daddr = c->state.address;
 		break;
 
 	case TCPR_RECOVER:
-		printk(KERN_DEBUG "TCPR recover\n");
 		tcpr_recover(&packet.tcp, &c->state.tcpr);
 		packet.ip.saddr = c->state.peer_address;
 		packet.ip.daddr = c->state.address;
 		break;
 
 	default:
-		printk(KERN_DEBUG "TCPR acknowledge\n");
 		tcpr_acknowledge(&packet.tcp, &c->state.tcpr);
 		packet.ip.saddr = c->state.address;
 		packet.ip.daddr = c->state.peer_address;
@@ -187,7 +186,6 @@ static void inject_update(struct iphdr *ip, struct udphdr *udp, struct tcpr_ip4 
 		struct tcpr_ip4 state;
 	} packet;
 
-	printk(KERN_DEBUG "TCPR update\n");
 	memset(&packet, 0, sizeof(packet));
 	packet.ip.ihl = sizeof(packet.ip) / 4;
 	packet.ip.version = 4;
@@ -218,7 +216,6 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 	udp = (struct udphdr *)((uint32_t *)ip + ip->ihl);
 	update = (struct tcpr_ip4 *)(udp + 1);
 
-	printk(KERN_DEBUG "TCPR received update\n");
 
 	read_lock(&connections_lock);
 	c = lookup_external(update->address, update->peer_address,
@@ -244,10 +241,8 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 	} else if (tcpr_verdict != TCPR_DROP) {
 		inject_tcp(c, tcpr_verdict, skb);
 	} else {
-		printk(KERN_DEBUG "Dropping update.\n");
 	}
 	if (c->state.tcpr.done) {
-		printk(KERN_DEBUG "Connection is done.\n");
 		connection_done(c);
 	}
 	spin_unlock(&c->tcpr_lock);
@@ -267,7 +262,6 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb, struct net *net_ns)
 		return tcpr_tg_update(skb, net_ns);
 	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
 
-	printk(KERN_DEBUG "TCPR received packet from application (syn %d, ack %d, fin %d, rst %d)\n", tcp->syn, tcp->ack, tcp->fin, tcp->rst);
 	
 	read_lock(&connections_lock);
 	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest,
@@ -301,7 +295,6 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb, struct net *net_ns)
 		return NF_DROP;
 	tcp = (struct tcphdr *)((uint32_t *)ip + ip->ihl);
 
-	printk(KERN_DEBUG "TCPR received packet from peer (syn %d, ack %d, fin %d, rst %d)\n", tcp->syn, tcp->ack, tcp->fin, tcp->rst);
 
 	read_lock(&connections_lock);
 	c = lookup_external(ip->daddr, ip->saddr, tcp->dest, tcp->source,
