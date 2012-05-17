@@ -21,6 +21,7 @@ static struct sockaddr_in sockname;
 static struct sockaddr_in peername;
 
 static int checkpointing = 1;
+static int verbose;
 
 static int listen_sock = -1;
 static int tcpr_sock = -1;
@@ -34,6 +35,8 @@ static size_t send_buffer_size;
 static size_t receive_buffer_size;
 static int user_eof;
 static int peer_eof;
+static unsigned long send_total;
+static unsigned long receive_total;
 
 static void print_help_and_exit(const char *program)
 {
@@ -47,6 +50,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -c [HOST:]PORT  Connect to HOST:PORT.\n");
 	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
 	fprintf(stderr, "  -C              Bypass TCPR checkpointing.\n");
+	fprintf(stderr, "  -v              Print connection statistics.\n");
 	fprintf(stderr, "  -?              Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
@@ -54,7 +58,7 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "b:c:t:C?")) {
+		switch (getopt(argc, argv, "b:c:t:Cv?")) {
 		case 'b':
 			bind_address = optarg;
 			break;
@@ -66,6 +70,9 @@ static void handle_options(int argc, char **argv)
 			break;
 		case 'C':
 			checkpointing = 0;
+			break;
+		case 'v':
+			verbose = 1;
 			break;
 		case -1:
 			return;
@@ -268,6 +275,7 @@ static void handle_events(void)
 					send(tcpr_sock, &state, sizeof(state), 0);
 				}
 				receive_buffer_size += n;
+				receive_total += n;
 			} else if (n < 0) {
 				perror("Reading from peer");
 				exit(EXIT_FAILURE);
@@ -285,6 +293,7 @@ static void handle_events(void)
 			n = write(sock, send_buffer, send_buffer_size);
 			if (n > 0) {
 				send_buffer_size -= n;
+				send_total += n;
 				if (send_buffer_size > 0) {
 					memmove(send_buffer, &send_buffer[n],
 						send_buffer_size);
@@ -347,6 +356,14 @@ static void teardown(void)
 		perror("Closing");
 }
 
+static void print_statistics(void)
+{
+	if (!verbose)
+		return;
+	fprintf(stderr, "Received %lu bytes.\n", receive_total);
+	fprintf(stderr, "Sent %lu bytes.\n", send_total);
+}
+
 int main(int argc, char **argv)
 {
 	handle_options(argc, argv);
@@ -354,5 +371,6 @@ int main(int argc, char **argv)
 	setup_tcpr();
 	handle_events();
 	teardown();
+	print_statistics();
 	return EXIT_SUCCESS;
 }
