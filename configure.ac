@@ -12,6 +12,8 @@ AM_PROG_CC_C_O
 
 AC_SEARCH_LIBS([xtables_register_target], [xtables], [], [
   AC_MSG_ERROR([the xtables library is required])])
+AC_SEARCH_LIBS([clock_gettime], [rt], [], [
+  AC_MSG_ERROR([clock_gettime is required])])
 
 AC_CONFIG_FILES([Makefile])
 
