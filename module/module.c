@@ -267,8 +267,14 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb, struct net *net_ns)
 	c = lookup_internal(ip->saddr, ip->daddr, tcp->source, tcp->dest,
 			    net_ns);
 	read_unlock(&connections_lock);
-	if (!c)
-		return NF_DROP;
+	if (!c) {
+		if (tcp->ack)
+			return NF_DROP;
+		c = connection_create(ip->saddr, ip->daddr,
+				      tcp->source, tcp->dest, net_ns);
+		if (!c)
+			return NF_DROP;
+	}
 
 	spin_lock(&c->tcpr_lock);
 	tcpr_verdict = tcpr_filter(&c->state.tcpr, tcp, ntohs(ip->tot_len) - ip->ihl * 4);
