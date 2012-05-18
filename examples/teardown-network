@@ -1,0 +1,7 @@
+#! /bin/sh
+
+ip link delete application
+ip link delete peer
+ip link delete tcpr
+ip netns delete application
+ip netns delete peer

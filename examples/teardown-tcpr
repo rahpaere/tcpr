@@ -1,11 +1,6 @@
 #! /bin/sh
 
-ip link delete application
-ip link delete peer
-ip link delete tcpr
-ip netns delete application
-ip netns delete peer
-
 iptables -t mangle -D FORWARD -m physdev --physdev-in application -p tcp -j TCPR
 iptables -t mangle -D FORWARD -m physdev --physdev-in application -p udp -j TCPR
 iptables -t mangle -D FORWARD -m physdev --physdev-out application -p tcp -j TCPR --peer
+rmmod tcpr

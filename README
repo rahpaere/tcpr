@@ -29,13 +29,14 @@ Once the module is installed, load it into the kernel.
   # modprobe tcpr
 
 The scripts in the `examples' directory provide a simple demonstration
-of TCPR.  First, inspect the `setup' script, then run it to provide some
-infrastructure for running the example application and peer in their own
-lightweight virtual network, with the host acting as ethernet bridge and
-filtering all TCP traffic through TCPR.  Then, in one terminal run the
-`application' script, and in another run the `peer'.  Type messages to
-chat back and forth.  Kill the application with control-c, and recover
-it with the `recover' script.  Finally, end the connection gracefully
-with control-d at each endpoint, and run `teardown' to release the
-infrastructure.  The scripts and the source code for the `tcpr-chat'
-program constitute a working guide to setting up and using TCPR.
+of TCPR.  First, inspect the setup scripts, then set up the network and
+TCPR to prove some infrastructure for running the example application
+and peer in their own lightweight virtual network, with the host acting
+as ethernet bridge and filtering all TCP traffic through TCPR.  Then,
+in one terminal run the `application' script, and in another run the
+`peer'.  Type messages to chat back and forth.  Kill the application
+with control-c, and recover it with the `recover' script.  Finally,
+end the connection gracefully with control-d at each endpoint, and tear
+down the network and TCPR to release the infrastructure.  The scripts
+and the source code for the `tcpr-chat' program constitute a working
+guide to setting up and using TCPR.

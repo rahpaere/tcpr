@@ -1,0 +1,6 @@
+#! /bin/sh
+
+modprobe tcpr
+iptables -t mangle -A FORWARD -m physdev --physdev-in application -p tcp -j TCPR
+iptables -t mangle -A FORWARD -m physdev --physdev-in application -p udp -j TCPR
+iptables -t mangle -A FORWARD -m physdev --physdev-out application -p tcp -j TCPR --peer
