@@ -4,11 +4,11 @@ ip netns add application
 ip netns add peer
 ip link add application type veth peer name applicationeth
 ip link add peer type veth peer name peereth
+ip link add tcpr type bridge
+ip link set application master tcpr
+ip link set peer master tcpr
 ip link set applicationeth netns application name eth0
 ip link set peereth netns peer name eth0
-brctl addbr tcpr
-brctl addif tcpr application
-brctl addif tcpr peer
 ip address add 10.0.0.3/24 dev tcpr
 ip netns exec application ip address add 10.0.0.1/24 dev eth0
 ip netns exec application ip link set eth0 up
