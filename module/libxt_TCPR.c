@@ -49,7 +49,7 @@ static void tcpr_tg_save(const void *ip, const struct xt_entry_target *target)
 	(void)ip;
 
 	if (*peer)
-		printf("--peer");
+		printf(" --peer");
 }
 
 static struct xtables_target tcpr_tg_reg = {
