@@ -10,8 +10,9 @@ libxt_TCPR_la_LIBADD = -lxtables
 tcpr_includedir=$(includedir)/tcpr
 tcpr_include_HEADERS = include/tcpr/filter.h include/tcpr/types.h
 
-bin_PROGRAMS = tcpr-chat tcpr-control tcpr-bridge ttcpr
+bin_PROGRAMS = tcpr-chat tcpr-control tcpr-bridge tcpr-benchmark ttcpr
 tcpr_chat_SOURCES = src/chat.c
 tcpr_control_SOURCES = src/control.c
 tcpr_bridge_SOURCES = src/bridge.c
+tcpr_benchmark_SOURCES = src/benchmark.c
 ttcpr_SOURCES = src/ttcpr.c

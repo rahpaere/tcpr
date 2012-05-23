@@ -1,24 +1,26 @@
-#include <tcpr/application.h>
+#include <tcpr/types.h>
 
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 
 #define NUM_CONNECTIONS 256
 
-static const char *internal_host = "127.0.0.3";
-static const char *peer_host = "127.0.0.1";
-static const char *peer_port = "9999";
-static int running_peer;
-static int listening_socket;
+static char *tcpr_address;
+static char *bind_address;
+static char *connect_address;
+
+static int listen_sock = -1;
+static int tcpr_sock = -1;
 
 struct connection {
 	int sock;
 	struct sockaddr_in addr;
 	struct sockaddr_in peer_addr;
-	struct tcpr_connection tcpr;
+	struct tcpr_ip4 state;
 } connections[NUM_CONNECTIONS];
 
 static void print_help_and_exit(const char *program)
@@ -28,39 +30,36 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "Benchmark recovery.\n");
 	fprintf(stderr, "\n");
 	fprintf(stderr, "Options:\n");
-	fprintf(stderr, "  -i HOST  Internally, the application is bound to HOST.\n");
-	fprintf(stderr, "  -h HOST  The peer is bound to HOST.\n");
-	fprintf(stderr, "  -p PORT  The peer is bound to PORT.\n");
-	fprintf(stderr, "  -P       Run as the peer.\n");
-	fprintf(stderr, "  -?       Print this help message and exit.\n");
+	fprintf(stderr, "  -b [HOST:]PORT  Bind to HOST:PORT.\n");
+	fprintf(stderr, "  -c [HOST:]PORT  Connect to HOST:PORT.\n");
+	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
+	fprintf(stderr, "  -?              Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
 
 static void handle_options(int argc, char **argv)
 {
-	for (;;)
-		switch (getopt(argc, argv, "i:h:p:P?")) {
-		case 'i':
-			internal_host = optarg;
-			break;
-		case 'h':
-			peer_host = optarg;
-			break;
-		case 'p':
-			peer_port = optarg;
-			break;
-		case 'P':
-			running_peer = 1;
-			break;
-		case -1:
-			return;
-		default:
-			print_help_and_exit(argv[0]);
-		}
+        for (;;)
+                switch (getopt(argc, argv, "b:c:t:Cv?")) {
+                case 'b':
+                        bind_address = optarg;
+                        break;
+                case 'c':
+                        connect_address = optarg;
+                        break;
+                case 't':
+                        tcpr_address = optarg;
+                        break;
+                case -1:
+                        return;
+                default:
+                        print_help_and_exit(argv[0]);
+                }
 }
-
 static void open_listening_socket(void)
 {
+	char *port;
+	char *host;
 	int err;
 	int s;
 	int yes = 1;
@@ -84,7 +83,15 @@ static void open_listening_socket(void)
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	err = getaddrinfo(NULL, peer_port, &hints, &ai);
+	port = strchr(bind_address, ':');
+	if (port) {
+		host = bind_address;
+		*port++ = '\0';
+	} else {
+		port = bind_address;
+		host = NULL;
+	}
+	err = getaddrinfo(host, port, &hints, &ai);
 	if (err) {
 		fprintf(stderr, "Resolving bind address: %s\n",
 				gai_strerror(err));
@@ -101,12 +108,12 @@ static void open_listening_socket(void)
 		exit(EXIT_FAILURE);
 	}
 
-	listening_socket = s;
+	listen_sock = s;
 }
 
 static void accept_connection(struct connection *c)
 {
-	c->sock = accept(listening_socket, NULL, NULL);
+	c->sock = accept(listen_sock, NULL, NULL);
 	if (c->sock < 0) {
 		perror("Accepting");
 		exit(EXIT_FAILURE);
@@ -121,7 +128,7 @@ static void reap_connection(struct connection *c)
 	do {
 		err = read(c->sock, buf, sizeof(buf));
 	} while (err > 0);
-	if (err < 0) {
+	if (err < 0 && !tcpr_address) {
 		perror("Consuming input");
 		exit(EXIT_FAILURE);
 	}
@@ -130,11 +137,56 @@ static void reap_connection(struct connection *c)
 
 static void close_listening_socket(void)
 {
-	close(listening_socket);
+	close(listen_sock);
+}
+
+static void setup_tcpr(void)
+{
+        char *host;
+        char *port;
+        int err;
+        int s;
+        struct addrinfo *ai;
+        struct addrinfo hints;
+
+        s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (s < 0) {
+                perror("Creating socket");
+                exit(EXIT_FAILURE);
+        }
+
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        hints.ai_protocol = IPPROTO_UDP;
+
+        port = strchr(tcpr_address, ':');
+        if (port) {
+                host = tcpr_address;
+                *port++ = '\0';
+        } else {
+                port = tcpr_address;
+                host = NULL;
+        }
+
+        err = getaddrinfo(host, port, &hints, &ai);
+        if (err) {
+                fprintf(stderr, "Resolving \"%s\": %s\n", tcpr_address, gai_strerror(err));
+                exit(EXIT_FAILURE);
+        }
+
+        if (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
+                perror("Connecting to TCPR");
+                exit(EXIT_FAILURE);
+        }
+
+        tcpr_sock = s;
 }
 
 static void open_benchmark_socket(struct connection *c)
 {
+	static char *host;
+	static char *port;
 	int err;
 	int s;
 	int yes = 1;
@@ -158,19 +210,17 @@ static void open_benchmark_socket(struct connection *c)
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	err = getaddrinfo(internal_host, NULL, &hints, &ai);
-	if (err) {
-		fprintf(stderr, "Resolving bind address: %s\n",
-				gai_strerror(err));
-		exit(EXIT_FAILURE);
+	if (!port) {
+		port = strchr(connect_address, ':');
+		if (port) {
+			host = connect_address;
+			*port++ = '\0';
+		} else {
+			port = connect_address;
+			host = NULL;
+		}
 	}
-	if (bind(s, ai->ai_addr, ai->ai_addrlen) < 0) {
-		perror("Binding");
-		exit(EXIT_FAILURE);
-	}
-	freeaddrinfo(ai);
-
-	err = getaddrinfo(peer_host, peer_port, &hints, &ai);
+	err = getaddrinfo(host, port, &hints, &ai);
 	if (err) {
 		fprintf(stderr, "Resolving peer address: %s\n",
 				gai_strerror(err));
@@ -189,17 +239,32 @@ static void open_benchmark_socket(struct connection *c)
 
 	addrlen = sizeof(c->addr);
 	getsockname(s, (struct sockaddr *)&c->addr, &addrlen);
+
+	c->state.address = c->addr.sin_addr.s_addr;
+	c->state.peer_address = c->peer_addr.sin_addr.s_addr;
+	c->state.tcpr.hard.port = c->addr.sin_port;
+	c->state.tcpr.hard.peer.port = c->peer_addr.sin_port;
+
+	send(tcpr_sock, &c->state, sizeof(c->state), 0);
+	recv(tcpr_sock, &c->state, sizeof(c->state), 0);
 }
 
 static void fail(struct connection *c)
 {
-	close(c->sock);
+	c->state.tcpr.failed = 1;
+	c->state.tcpr.done = 1;
+	send(tcpr_sock, &c->state, sizeof(c->state), 0);
+	reap_connection(c);
 }
 
 static void recover(struct connection *c)
 {
 	int s;
 	int yes = 1;
+
+	c->state.tcpr.failed = 0;
+	c->state.tcpr.done = 0;
+	send(tcpr_sock, &c->state, sizeof(c->state), 0);
 
 	s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (s < 0) {
@@ -222,32 +287,21 @@ static void recover(struct connection *c)
 		exit(EXIT_FAILURE);
 	}
 
-	if (tcpr_setup_connection(&c->tcpr, c->peer_addr.sin_addr.s_addr, c->peer_addr.sin_port, c->addr.sin_port, 0) < 0) {
-		perror("Recovering, setting up TCPR");
-		exit(EXIT_FAILURE);
-	}
-
 	c->sock = s;
 }
 
 static void teardown(struct connection *c)
 {
-	char buf[64];
-	int err;
-
-	tcpr_close(&c->tcpr);
-	tcpr_teardown_connection(&c->tcpr);
-
+	c->state.tcpr.hard.done_reading = 1;
+	c->state.tcpr.hard.done_writing = 1;
+	send(tcpr_sock, &c->state, sizeof(c->state), 0);
 	shutdown(c->sock, SHUT_WR);
-	do {
-		err = read(c->sock, buf, sizeof(buf));
-	} while (err > 0);
-	if (err < 0) {
-		perror("Consuming input");
-		exit(EXIT_FAILURE);
-	}
+	reap_connection(c);
+}
 
-	close(c->sock);
+void teardown_tcpr(void)
+{
+	close(tcpr_sock);
 }
 
 int main(int argc, char **argv)
@@ -259,7 +313,7 @@ int main(int argc, char **argv)
 
 	handle_options(argc, argv);
 
-	if (running_peer) {
+	if (!tcpr_address) {
 		open_listening_socket();
 		for (i = 0; i < NUM_CONNECTIONS; i++)
 			accept_connection(&connections[i]);
@@ -269,15 +323,12 @@ int main(int argc, char **argv)
 		return EXIT_SUCCESS;
 	}
 
+	setup_tcpr();
+
 	for (i = 0; i < NUM_CONNECTIONS; i++)
 		open_benchmark_socket(&connections[i]);
-
-	//sleep(30);
-
 	for (i = 0; i < NUM_CONNECTIONS; i++)
 		fail(&connections[i]);
-
-	sleep(30);
 
 	clock_gettime(CLOCK_REALTIME, &start);
 	for (i = 0; i < NUM_CONNECTIONS; i++)
@@ -291,6 +342,7 @@ int main(int argc, char **argv)
 
 	for (i = 0; i < NUM_CONNECTIONS; i++)
 		teardown(&connections[i]);
+	teardown_tcpr();
 
 	return EXIT_SUCCESS;
 }
