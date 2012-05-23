@@ -13,6 +13,8 @@ static char *tcpr_address;
 static char *bind_address;
 static char *connect_address;
 
+static int fast;
+
 static int listen_sock = -1;
 static int tcpr_sock = -1;
 
@@ -33,6 +35,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b [HOST:]PORT  Bind to HOST:PORT.\n");
 	fprintf(stderr, "  -c [HOST:]PORT  Connect to HOST:PORT.\n");
 	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
+	fprintf(stderr, "  -f              Measure fast failover.\n");
 	fprintf(stderr, "  -?              Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
 }
@@ -40,7 +43,7 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
         for (;;)
-                switch (getopt(argc, argv, "b:c:t:Cv?")) {
+                switch (getopt(argc, argv, "b:c:t:f?")) {
                 case 'b':
                         bind_address = optarg;
                         break;
@@ -50,6 +53,9 @@ static void handle_options(int argc, char **argv)
                 case 't':
                         tcpr_address = optarg;
                         break;
+		case 'f':
+			fast = 1;
+			break;
                 case -1:
                         return;
                 default:
@@ -252,8 +258,11 @@ static void open_benchmark_socket(struct connection *c)
 static void fail(struct connection *c)
 {
 	c->state.tcpr.failed = 1;
-	c->state.tcpr.done = 1;
+	if (!fast)
+		c->state.tcpr.done = 1;
 	send(tcpr_sock, &c->state, sizeof(c->state), 0);
+	c->state.tcpr.failed = 0;
+	c->state.tcpr.done = 0;
 	reap_connection(c);
 }
 
@@ -262,9 +271,8 @@ static void recover(struct connection *c)
 	int s;
 	int yes = 1;
 
-	c->state.tcpr.failed = 0;
-	c->state.tcpr.done = 0;
-	send(tcpr_sock, &c->state, sizeof(c->state), 0);
+	if (!fast)
+		send(tcpr_sock, &c->state, sizeof(c->state), 0);
 
 	s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (s < 0) {
