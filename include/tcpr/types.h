@@ -38,6 +38,7 @@ struct tcpr {
 	uint8_t have_fin;
 	uint8_t done;
 	uint8_t failed;
+	uint8_t syn_sent;
 };
 
 struct tcpr_ip4 {

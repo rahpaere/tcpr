@@ -302,6 +302,7 @@ static void teardown(struct connection *c)
 {
 	c->state.tcpr.hard.done_reading = 1;
 	c->state.tcpr.hard.done_writing = 1;
+	c->state.tcpr.failed = 0;
 	send(tcpr_sock, &c->state, sizeof(c->state), 0);
 	shutdown(c->sock, SHUT_WR);
 	reap_connection(c);
@@ -335,6 +336,7 @@ int main(int argc, char **argv)
 
 	for (i = 0; i < NUM_CONNECTIONS; i++)
 		open_benchmark_socket(&connections[i]);
+	sleep(1);
 	for (i = 0; i < NUM_CONNECTIONS; i++)
 		fail(&connections[i]);
 

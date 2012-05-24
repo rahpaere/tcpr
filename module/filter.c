@@ -60,7 +60,7 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 	}
 
 	if (!h->ack) {
-		t->failed = 0;
+		t->syn_sent = 1;
 		if (t->peer.have_ack) {
 			t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
 			t->hard.done_writing = 0;
@@ -77,8 +77,12 @@ enum tcpr_verdict tcpr_filter(struct tcpr *t, struct tcphdr *h, size_t size)
 		}
 	}
 
-	if (t->failed)
+	if (t->syn_sent) {
+		t->syn_sent = 0;
+		t->failed = 0;
+	} else if (t->failed) {
 		return TCPR_RESET;
+	}
 
 	t->ack = h->ack_seq;
 	if (t->hard.done_reading) {
@@ -178,6 +182,12 @@ enum tcpr_verdict tcpr_filter_peer(struct tcpr *t, struct tcphdr *h, size_t size
 			t->peer.have_ack = 1;
 			if (t->have_fin && t->peer.have_fin && t->peer.ack == t->fin && t->peer.fin == t->hard.ack)
 				t->done = 1;
+			if (t->syn_sent && !h->syn) {
+				t->delta = ntohl(t->seq) - ntohl(t->peer.ack);
+				t->hard.done_writing = 0;
+				t->have_fin = 0;
+				return TCPR_RECOVER;
+			}
 		}
 
 		check += shorten(~h->ack_seq);
@@ -204,11 +214,14 @@ enum tcpr_verdict tcpr_update(struct tcpr *t, struct tcpr *u)
 	t->port = u->port;
 	t->done = u->done;
 	t->failed = u->failed;
-	if (t->hard.ack != ack)
-		return TCPR_ACKNOWLEDGE;
-	if (u->failed)
+	if (!t->peer.have_ack)
+		return TCPR_DROP;
+	else if (t->failed)
 		return TCPR_RESET;
-	return TCPR_DROP;
+	else if (t->hard.ack != ack)
+		return TCPR_ACKNOWLEDGE;
+	else
+		return TCPR_DROP;
 }
 
 void tcpr_acknowledge(struct tcphdr *h, struct tcpr *t)
