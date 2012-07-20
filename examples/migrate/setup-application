@@ -1,0 +1,28 @@
+#! /bin/sh
+
+if test $# -ne 1
+then
+	echo Usage: $0 INDEX
+	exit 1
+fi
+
+ip netns add application$1
+
+ip link add name application$1 address 2:0:0:0:0:1 type veth \
+	peer name eth0 address 2:0:0:0:0:2 netns application$1
+
+ip netns exec application$1 sh <<END
+ip address add 10.0.0.2/24 dev eth0
+ip link set lo up
+ip link set eth0 up
+END
+
+if ! ip link show bridge 2>/dev/null >&2
+then
+	ip link add name bridge type bridge
+	ip link set bridge up
+	ip address add 10.0.0.1/24 dev bridge
+fi
+
+ip link set application$1 master bridge
+ip link set application$1 up

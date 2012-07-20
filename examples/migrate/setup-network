@@ -1,0 +1,6 @@
+#! /bin/sh
+
+./setup-gateway
+./setup-replica 1
+./setup-replica 2
+./setup-peer

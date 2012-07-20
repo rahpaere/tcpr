@@ -1,0 +1,3 @@
+#! /bin/sh
+
+exec ip netns exec application1 tcpr-chat -b 192.168.1.1:9999 -t 192.168.1.3:7777

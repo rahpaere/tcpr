@@ -1,0 +1,6 @@
+#! /bin/sh
+
+ovs-vsctl add-br gateway
+ovs-ofctl add-flow gateway tcp,nw_dst=192.168.0.1,actions=mod_dl_dst:00:00:00:00:00:01,mod_dl_src:00:00:00:00:00:02,mod_nw_src:192.168.0.2,output:3
+ovs-ofctl add-flow gateway tcp,nw_src=192.168.0.1,actions=mod_dl_src:00:00:00:00:01:03,mod_dl_dst:00:00:00:00:01:01,mod_nw_dst:192.168.1.1,output:1
+ip link set gateway up

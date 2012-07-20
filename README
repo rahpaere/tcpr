@@ -29,8 +29,9 @@ Once the module is installed, load it into the kernel.
   # modprobe tcpr
 
 The scripts in the `examples' directory provide a simple demonstration
-of TCPR.  First, inspect the setup scripts, then set up the network and
-TCPR to prove some infrastructure for running the example application
+of TCPR.  Start with `examplesrecovery, which demonstrate simple failure
+and recovery.  First, inspect the setup scripts, then set up the network
+and TCPR to prove some infrastructure for running the example application
 and peer in their own lightweight virtual network, with the host acting
 as ethernet bridge and filtering all TCP traffic through TCPR.  Then,
 in one terminal run the `application' script, and in another run the
@@ -40,3 +41,11 @@ end the connection gracefully with control-d at each endpoint, and tear
 down the network and TCPR to release the infrastructure.  The scripts
 and the source code for the `tcpr-chat' program constitute a working
 guide to setting up and using TCPR.
+
+Later, explore `examples/migrate', which demonstrate live migration
+based on an OpenFlow switch to migrate the underlying IP channel.
+You must have Open vSwitch installed.  As in the recover scripts, start
+with `application' and `peer' in separate terminals.  Then, in a third
+terminal, run `migrate 1 2' to take over the application on a second
+replica.  Go back to the first and run `migrate 2 1' to bring it back.
+End the connection as before.
