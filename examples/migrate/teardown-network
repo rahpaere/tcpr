@@ -1,0 +1,6 @@
+#! /bin/sh
+
+./teardown-peer
+./teardown-replica 2
+./teardown-replica 1
+./teardown-gateway
