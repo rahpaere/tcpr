@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/tcp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,9 @@ static char *connect_address;
 static struct sockaddr_in sockname;
 static struct sockaddr_in peername;
 
+static int discard;
+static unsigned long generate;
+
 static int checkpointing = 1;
 static int verbose;
 
@@ -30,8 +34,8 @@ static int sock = -1;
 
 struct tcpr_ip4 state;
 
-static char send_buffer[512];
-static char receive_buffer[512];
+static char send_buffer[16384];
+static char receive_buffer[16384];
 static size_t send_buffer_size;
 static size_t receive_buffer_size;
 static int user_eof;
@@ -54,6 +58,8 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -c [HOST:]PORT  Connect to HOST:PORT.\n");
 	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
 	fprintf(stderr, "  -C              Bypass TCPR checkpointing.\n");
+	fprintf(stderr, "  -d              Discard input.\n");
+	fprintf(stderr, "  -g BYTES        Generate output.\n");
 	fprintf(stderr, "  -v              Print connection statistics.\n");
 	fprintf(stderr, "  -?              Print this help message and exit.\n");
 	exit(EXIT_FAILURE);
@@ -62,7 +68,7 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "b:c:t:Cv?")) {
+		switch (getopt(argc, argv, "b:c:t:Cdg:v?")) {
 		case 'b':
 			bind_address = optarg;
 			break;
@@ -74,6 +80,13 @@ static void handle_options(int argc, char **argv)
 			break;
 		case 'C':
 			checkpointing = 0;
+			break;
+		case 'd':
+			discard = 1;
+			break;
+		case 'g':
+			generate = atoi(optarg);
+			user_eof = 1;
 			break;
 		case 'v':
 			verbose = 1;
@@ -246,16 +259,29 @@ static void setup_tcpr(void)
 	}
 }
 
+static void print_direction_statistics(char *name, unsigned long total, struct timespec *end)
+{
+	double time_total;
+	double throughput;
+
+	time_total = (double)end->tv_sec - (double)start.tv_sec + ((double)end->tv_nsec - (double)start.tv_nsec) / 1e9;
+	throughput = 8.0 * (double)total / time_total / 1e6;
+	fprintf(stderr, "%s: %lu bytes, %.9lf seconds, %.9lf Mbps\n", name, total, time_total, throughput);
+}
+
 static void handle_events(void)
 {
 	fd_set rfds;
 	fd_set wfds;
 	ssize_t n;
 
+	signal(SIGPIPE, SIG_IGN);
+
 	if (clock_gettime(CLOCK_REALTIME, &start))
 		perror("clock_gettime");
 	while (!peer_eof || !user_eof || send_buffer_size
-					|| receive_buffer_size) {
+					|| receive_buffer_size
+					|| generate > send_total) {
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);
 		if (!peer_eof && receive_buffer_size < sizeof(receive_buffer))
@@ -264,7 +290,7 @@ static void handle_events(void)
 			FD_SET(0, &rfds);
 		if (receive_buffer_size > 0)
 			FD_SET(1, &wfds);
-		if (send_buffer_size > 0)
+		if (send_buffer_size > 0 || generate > send_total)
 			FD_SET(sock, &wfds);
 		if (select(sock + 1, &rfds, &wfds, NULL, NULL) < 0) {
 			perror("Waiting for events");
@@ -280,8 +306,9 @@ static void handle_events(void)
 					state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + n);
 					send(tcpr_sock, &state, sizeof(state), 0);
 				}
-				receive_buffer_size += n;
 				receive_total += n;
+				if (!discard)
+					receive_buffer_size += n;
 			} else if (n < 0) {
 				perror("Reading from peer");
 				exit(EXIT_FAILURE);
@@ -298,25 +325,34 @@ static void handle_events(void)
 		}
 
 		if (FD_ISSET(sock, &wfds)) {
-			n = write(sock, send_buffer, send_buffer_size);
-			if (n > 0) {
+			if (generate) {
+				n = write(sock, send_buffer, generate < sizeof(send_buffer) ? generate : sizeof(send_buffer));
+				if (n < 0) {
+					perror("Writing to peer");
+					exit(EXIT_FAILURE);
+				}
+				send_total += n;
+			} else {
+				n = write(sock, send_buffer, send_buffer_size);
+				if (n < 0) {
+					perror("Writing to peer");
+					exit(EXIT_FAILURE);
+				}
 				send_buffer_size -= n;
 				send_total += n;
 				if (send_buffer_size > 0) {
 					memmove(send_buffer, &send_buffer[n],
 						send_buffer_size);
-				} else if (user_eof) {
-					if (tcpr_address) {
-						state.tcpr.hard.done_writing = 1;
-						send(tcpr_sock, &state, sizeof(state), 0);
-					}
-					shutdown(sock, SHUT_WR);
-					if (clock_gettime(CLOCK_REALTIME, &send_end))
-						perror("clock_gettime");
 				}
-			} else if (n < 0) {
-				perror("Writing to peer");
-				exit(EXIT_FAILURE);
+			}
+			if (user_eof && send_total >= generate) {
+				if (tcpr_address) {
+					state.tcpr.hard.done_writing = 1;
+					send(tcpr_sock, &state, sizeof(state), 0);
+				}
+				shutdown(sock, SHUT_WR);
+				if (clock_gettime(CLOCK_REALTIME, &send_end))
+					perror("clock_gettime");
 			}
 		}
 
@@ -356,6 +392,13 @@ static void handle_events(void)
 			}
 		}
 	}
+
+	if (verbose) {
+		if (receive_total)
+			print_direction_statistics("Received", receive_total, &receive_end);
+		if (send_total)
+			print_direction_statistics("Sent", send_total, &send_end);
+	}
 }
 
 static void teardown(void)
@@ -368,26 +411,6 @@ static void teardown(void)
 		perror("Closing");
 }
 
-static void print_direction_statistics(char *name, unsigned long total, struct timespec *end)
-{
-	double time_total;
-	double throughput;
-
-	time_total = (double)end->tv_sec - (double)start.tv_sec + ((double)end->tv_nsec - (double)start.tv_nsec) / 1e9;
-	throughput = (double)total / time_total;
-	fprintf(stderr, "%s: %lu bytes, %.9lf seconds, %.9lf bytes / second\n", name, total, time_total, throughput);
-}
-
-static void print_statistics(void)
-{
-	if (!verbose)
-		return;
-	if (receive_total)
-		print_direction_statistics("Received", receive_total, &receive_end);
-	if (send_total)
-		print_direction_statistics("Sent", send_total, &send_end);
-}
-
 int main(int argc, char **argv)
 {
 	handle_options(argc, argv);
@@ -395,6 +418,5 @@ int main(int argc, char **argv)
 	setup_tcpr();
 	handle_events();
 	teardown();
-	print_statistics();
 	return EXIT_SUCCESS;
 }
