@@ -18,6 +18,7 @@
 static char *tcpr_address;
 static char *bind_address;
 static char *connect_address;
+static char *hard_address;
 
 static struct sockaddr_in sockname;
 static struct sockaddr_in peername;
@@ -57,6 +58,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b [HOST:]PORT  Bind to HOST:PORT.\n");
 	fprintf(stderr, "  -c [HOST:]PORT  Connect to HOST:PORT.\n");
 	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
+	fprintf(stderr, "  -r [HOST:]PORT  Recover for old HOST:PORT.\n");
 	fprintf(stderr, "  -C              Bypass TCPR checkpointing.\n");
 	fprintf(stderr, "  -d              Discard input.\n");
 	fprintf(stderr, "  -g BYTES        Generate output.\n");
@@ -65,18 +67,38 @@ static void print_help_and_exit(const char *program)
 	exit(EXIT_FAILURE);
 }
 
+static void split_address(char **host, char **port, char *address)
+{
+	char *c;
+
+	c = strchr(address, ':');
+	if (c) {
+		*c++ = '\0';
+		*host = address;
+		*port = *c ? c : NULL;
+		
+	} else {
+		*host = NULL;
+		*port = address;
+	}
+}
+
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "b:c:t:Cdg:v?")) {
+		switch (getopt(argc, argv, "b:c:t:r:Cdg:v?")) {
 		case 'b':
-			bind_address = optarg;
+			split_address(&bind_host, &bind_port, optarg);
 			break;
 		case 'c':
-			connect_address = optarg;
+			split_address(&connect_host, &connect_port, optarg);
 			break;
 		case 't':
-			tcpr_address = optarg;
+			split_address(&tcpr_host, &tcpr_port, optarg);
+			using_tcpr = 1;
+			break;
+		case 'r':
+			split_address(&recover_host, &recover_port, optarg);
 			break;
 		case 'C':
 			checkpointing = 0;
@@ -89,174 +111,214 @@ static void handle_options(int argc, char **argv)
 			user_eof = 1;
 			break;
 		case 'v':
-			verbose = 1;
+			verbose++;
 			break;
 		case -1:
 			return;
 		default:
 			print_help_and_exit(argv[0]);
 		}
+
+	if (!using_tcpr) {
+		checkpointing = 0;
+	}
+
+	if (!recover_host)
+		recover_host = bind_host;
+	if (!recover_port)
+		recover_port = bind_port;
+	if (!bind_host)
+		bind_host = recover_host;
+	if (!bind_port)
+		bind_port = recover_port;
 }
 
-static void setup_connection(void)
+static int resolve_address(struct sockaddr *name, char *host, char *port,
+			   int socktype, int protocol)
 {
-	char *host;
-	char *port;
 	int err;
-	int s;
-	int yes = 1;
-	socklen_t addrlen;
-	struct addrinfo *ai;
 	struct addrinfo hints;
-
-	s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (s < 0) {
-		perror("Creating socket");
-		exit(EXIT_FAILURE);
-	}
-	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0) {
-		perror("Setting SO_REUSEADDR");
-		exit(EXIT_FAILURE);
-	}
+	struct addrinfo *ai;
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	if (bind_address) {
-		port = strchr(bind_address, ':');
-		if (port) {
-			host = bind_address;
-			*port++ = '\0';
-		} else {
-			port = bind_address;
-			host = NULL;
-		}
-
-		if (!connect_address)
-			hints.ai_flags |= AI_PASSIVE;
-		err = getaddrinfo(host, port, &hints, &ai);
-		if (err) {
-			fprintf(stderr, "Resolving \"%s\": %s\n", bind_address, gai_strerror(err));
-			exit(EXIT_FAILURE);
-		}
-		if (bind(s, ai->ai_addr, ai->ai_addrlen) < 0) {
-			perror("Binding");
-			exit(EXIT_FAILURE);
-		}
-		freeaddrinfo(ai);
-
-		if (!connect_address) {
-			if (listen(s, 16) < 0) {
-				perror("Listening");
-				exit(EXIT_FAILURE);
-			}
-			listen_sock = s;
-			addrlen = sizeof(peername);
-			s = accept(listen_sock, (struct sockaddr *)&peername, &addrlen);
-			if (s < 0) {
-				perror("Accepting");
-				exit(EXIT_FAILURE);
-			}
-
-			addrlen = sizeof(sockname);
-			getsockname(s, (struct sockaddr *)&sockname, &addrlen);
-			sock = s;
-			return;
-		}
-	}
-
-	port = strchr(connect_address, ':');
-	if (port) {
-		host = connect_address;
-		*port++ = '\0';
-	} else {
-		port = connect_address;
-		host = NULL;
-	}
+	hints.ai_socktype = socktype;
+	hints.ai_protocol = protocol;
 
 	err = getaddrinfo(host, port, &hints, &ai);
-	if (err) {
-		fprintf(stderr, "Resolving \"%s\": %s\n", connect_address, gai_strerror(err));
-		exit(EXIT_FAILURE);
-	}
-	while (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
-		perror("Connecting");
-		if (errno != ECONNREFUSED)
-			exit(EXIT_FAILURE);
-		sleep(2);
-	}
+	if (err)
+		return err;
+
+	memcpy(name, ai->ai_addr, ai->ai_addrlen);
 	freeaddrinfo(ai);
-
-	addrlen = sizeof(peername);
-	getpeername(s, (struct sockaddr *)&peername, &addrlen);
-
-	addrlen = sizeof(sockname);
-	getsockname(s, (struct sockaddr *)&sockname, &addrlen);
-
-	sock = s;
+	return 0;
 }
 
-static void setup_tcpr(void)
+static int reify_addresses(struct sockaddr_in *self, struct sockaddr_in *peer)
 {
-	char *host;
-	char *port;
-	int err;
+	struct sockaddr_in actual;
+	socklen_t socklen;
 	int s;
-	struct addrinfo *ai;
-	struct addrinfo hints;
-
-	if (!tcpr_address) {
-		checkpointing = 0;
-		return;
-	}
 
 	s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-	if (s < 0) {
-		perror("Creating socket");
-		exit(EXIT_FAILURE);
+	if (s < 0)
+		return -1;
+
+	actual.sin_family = AF_INET;
+	actual.sin_addr.s_addr = self->sin_addr.s_addr;
+	actual.sin_port = 0;
+	if (bind(s, (struct sockaddr *)&actual, sizeof(actual))) {
+		close(s);
+		return -1;
 	}
 
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_DGRAM;
-	hints.ai_protocol = IPPROTO_UDP;
+	if (connect(s, (struct sockaddr *)peer, sizeof(*peer))) {
+		close(s);
+		return -1;
+	}
 
-	port = strchr(tcpr_address, ':');
-	if (port) {
-		host = tcpr_address;
-		*port++ = '\0';
+	socklen = sizeof(actual);
+	if (getsockname(s, (struct sockaddr *)&actual, &socklen)) {
+		close(s);
+		return -1;
+	}
+
+	close(s);
+	self->sin_addr.s_addr = actual.sin_addr.s_addr;
+	return 0;
+}
+
+static int connect_to_tcpr(const char *host, const char *port)
+{
+	int s;
+	struct sockaddr_in name;
+
+	if (resolve_address((struct sockaddr *)&name, host, port, SOCK_DGRAM, IPPROTO_UDP))
+		return -1;
+
+	s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+	if (s < 0)
+		return -1;
+
+	if (connect(s, (struct sockaddr *)&name, sizeof(name))) { 
+		close(s);
+		return -1;
+	}
+
+	return s;
+}
+
+static int get_tcpr_state(struct tcpr_ip4 *state, int tcprsock,
+			  const char *application_host, const char *application_port,
+			  const char *peer_host, const char *peer_port)
+{
+	memset(state, 0, sizeof(*state));
+	state->hard_address = self->sin_addr.s_addr;
+	state->peer_address = peer->sin_addr.s_addr;
+	state->tcpr.hard.port = self->sin_port;
+	state->tcpr.hard.peer.port = peer->sin_port;
+
+	if (send(tcprsock, state, sizeof(*state), 0) < 0) {
+		perror("Sending TCPR query");
+		return -1;
+	}
+
+	if (recv(tcprsock, state, sizeof(*state), 0) < 0) {
+		perror("Receiving TCPR state");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int connect_to_peer(const char *bind_host, const char *bind_port,
+			   const char *connect_host, const char *connect_port,
+			   const char *recover_host, const char *recover_port,
+			   struct tcpr_ip4 *state, int tcprsock)
+{
+	int s;
+	int yes = 1;
+	struct sockaddr_in bind_address;
+	struct sockaddr_in connect_address;
+	struct sockaddr_in recover_address;
+	socklen_t socklen;
+
+	if (resolve_address((struct sockaddr *)&connect_address, connect_host, connect_port, SOCK_STREAM, IPPROTO_TCP))
+		return -1;
+
+	if (bind_host || bind_port) {
+		if (resolve_address((struct sockaddr *)&bind_address, bind_host, bind_port, SOCK_STREAM, IPPROTO_TCP))
+			return -1;
 	} else {
-		port = tcpr_address;
-		host = NULL;
+		bind_address.sin_family = AF_INET;
+		bind_address.sin_port = 0;
+		bind_address.sin_addr.s_addr = INADDR_ANY;
 	}
 
-	err = getaddrinfo(host, port, &hints, &ai);
-	if (err) {
-		fprintf(stderr, "Resolving \"%s\": %s\n", tcpr_address, gai_strerror(err));
-		exit(EXIT_FAILURE);
+	s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	if (s < 0)
+		return -1;
+
+	if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes))) {
+		close(s);
+		return -1;
 	}
 
-	if (connect(s, ai->ai_addr, ai->ai_addrlen) < 0) {
-		perror("Connecting to TCPR");
-		exit(EXIT_FAILURE);
+	if (bind(s, (struct sockaddr *)&bind_address, sizeof(bind_address))) {
+		close(s);
+		return -1;
 	}
 
-	tcpr_sock = s;
-
-	state.address = sockname.sin_addr.s_addr;
-	state.peer_address = peername.sin_addr.s_addr;
-	state.tcpr.hard.port = sockname.sin_port;
-	state.tcpr.hard.peer.port = peername.sin_port;
-
-	send(tcpr_sock, &state, sizeof(state), 0);
-	recv(tcpr_sock, &state, sizeof(state), 0);
-
-	if (!checkpointing) {
-		state.tcpr.hard.done_reading = 1;
-		send(tcpr_sock, &state, sizeof(state), 0);
+	socklen = sizeof(bind_address);
+	if (getsockname(s, (struct sockaddr *)&bind_address, &socklen)) {
+		close(s);
+		return -1;
 	}
+
+	if (reify_addresses((struct sockaddr *)&bind_address, (struct sockaddr *)&connect_address)) {
+		close(s);
+		return -1;
+	}
+
+	if (recover_host || recover_port) {
+		if (resolve_address((struct sockaddr *)&recover_address, recover_host, recover_port, SOCK_STREAM, IPPROTO_TCP)) {
+			close(s);
+			return -1;
+		}
+		if (!recover_address.sin_addr.s_addr)
+			recover_address.sin_addr.s_addr = bind_address.sin_addr.s_addr;
+		if (!recover_address.sin_port)
+			recover_address.sin_port = bind_address.sin_port;
+	} else {
+		recover_address.sin_family = AF_INET;
+		recover_address.sin_addr.s_addr = bind_address.sin_addr.s_addr;
+		recover_address.sin_port = bind_address.sin_port;
+	}
+
+	if (state) {
+		if (get_tcpr_state(state, tcprsock, &recover_address, &connect_address)) {
+			close(s);
+			return -1;
+		}
+		state->address = bind_address.sin_addr.s_addr;
+		state->tcpr.port = bind_address.sin_port;
+		if (send(tcprsock, state, sizeof(*state), 0) < 0) {
+			close(s);
+			return -1;
+		}
+	}
+
+	if (connect(s, (struct sockaddr *)&connect_address, sizeof(connect_address))) {
+		close(s);
+		return -1;
+	}
+
+	if (get_tcpr_state(state, tcprsock, &recover_address, &connect_address)) {
+		close(s);
+		return -1;
+	}
+
+	return s;
 }
 
 static void print_direction_statistics(char *name, unsigned long total, struct timespec *end)
@@ -276,6 +338,11 @@ static void handle_events(void)
 	ssize_t n;
 
 	signal(SIGPIPE, SIG_IGN);
+
+	if (!checkpointing) {
+		state.tcpr.hard.done_reading = 1;
+		send(tcpr_sock, &state, sizeof(state), 0);
+	}
 
 	if (clock_gettime(CLOCK_REALTIME, &start))
 		perror("clock_gettime");
@@ -414,8 +481,8 @@ static void teardown(void)
 int main(int argc, char **argv)
 {
 	handle_options(argc, argv);
+	setup_tcpr_connection();
 	setup_connection();
-	setup_tcpr();
 	handle_events();
 	teardown();
 	return EXIT_SUCCESS;

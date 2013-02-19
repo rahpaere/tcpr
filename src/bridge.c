@@ -237,7 +237,7 @@ static void setup_tcpr(void)
 	tcpr_sock = s;
 
 	for (i = 0; i < 2; i++) {
-		clients[i].state.address = clients[i].address.sin_addr.s_addr;
+		clients[i].state.hard_address = clients[i].address.sin_addr.s_addr;
 		clients[i].state.peer_address = clients[i].peer_address.sin_addr.s_addr;
 		clients[i].state.tcpr.hard.port = clients[i].address.sin_port;
 		clients[i].state.tcpr.hard.peer.port = clients[i].peer_address.sin_port;

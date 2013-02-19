@@ -44,6 +44,7 @@ struct tcpr {
 struct tcpr_ip4 {
 	uint32_t address;
 	uint32_t peer_address;
+	uint32_t hard_address;
 	struct tcpr tcpr;
 };
 

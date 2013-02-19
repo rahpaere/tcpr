@@ -140,7 +140,7 @@ static void setup(void)
 	struct sockaddr_in sa;
 
 	lookup(bind_address, SOCK_STREAM, IPPROTO_TCP, &sa);
-	state.address = sa.sin_addr.s_addr;
+	state.hard_address = sa.sin_addr.s_addr;
 	state.tcpr.hard.port = sa.sin_port;
 
 	lookup(connect_address, SOCK_STREAM, IPPROTO_TCP, &sa);
@@ -170,6 +170,10 @@ static void setup(void)
 
 static void print(void)
 {
+	if (state.hard_address)
+		printf("%12" PRIx32 "  External address\n", ntohl(state.hard_address));
+	if (state.address)
+		printf("%12" PRIx32 "  Internal address\n", ntohl(state.address));
 	if (state.tcpr.hard.port)
 		printf("%12" PRIu16 "  External port\n", ntohs(state.tcpr.hard.port));
 	if (state.tcpr.port)

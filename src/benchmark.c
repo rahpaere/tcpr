@@ -246,7 +246,7 @@ static void open_benchmark_socket(struct connection *c)
 	addrlen = sizeof(c->addr);
 	getsockname(s, (struct sockaddr *)&c->addr, &addrlen);
 
-	c->state.address = c->addr.sin_addr.s_addr;
+	c->state.hard_address = c->addr.sin_addr.s_addr;
 	c->state.peer_address = c->peer_addr.sin_addr.s_addr;
 	c->state.tcpr.hard.port = c->addr.sin_port;
 	c->state.tcpr.hard.peer.port = c->peer_addr.sin_port;

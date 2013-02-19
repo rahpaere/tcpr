@@ -50,7 +50,7 @@ static struct connection *lookup_external(uint32_t address,
 
 	list_for_each_entry(c, &connections, list)
 		if (c->state.peer_address == peer_address
-		    && c->state.address == address
+		    && c->state.hard_address == address
 		    && c->state.tcpr.hard.peer.port == peer_port
 		    && c->state.tcpr.hard.port == port
 		    && c->net_ns == net_ns)
@@ -82,6 +82,7 @@ static struct connection *connection_create(uint32_t address,
 	INIT_LIST_HEAD(&c->list);
 	memset(&c->state.tcpr, 0, sizeof(c->state.tcpr));
 	c->state.address = address;
+	c->state.hard_address = address;
 	c->state.peer_address = peer_address;
 	c->net_ns = net_ns;
 //	c->state.tcpr.hard.peer.port = peer_port;
@@ -163,7 +164,7 @@ static void inject_tcp(struct connection *c, enum tcpr_verdict tcpr_verdict, str
 
 	default:
 		tcpr_acknowledge(&packet.tcp, &c->state.tcpr);
-		packet.ip.saddr = c->state.address;
+		packet.ip.saddr = c->state.hard_address;
 		packet.ip.daddr = c->state.peer_address;
 	}
 
@@ -218,7 +219,7 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 
 
 	read_lock(&connections_lock);
-	c = lookup_external(update->address, update->peer_address,
+	c = lookup_external(update->hard_address, update->peer_address,
 			    update->tcpr.hard.port, update->tcpr.hard.peer.port,
 			    net_ns);
 	read_unlock(&connections_lock);
@@ -227,12 +228,17 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, struct net *net_ns)
 			inject_update(ip, udp, update, skb);
 			return NF_DROP;
 		}
-		c = connection_create(update->address, update->peer_address,
+		c = connection_create(update->hard_address, update->peer_address,
 				      update->tcpr.hard.port,
 				      update->tcpr.hard.peer.port, net_ns);
 		if (!c)
 			return NF_DROP;
 	}
+
+	if (update->address)
+		c->state.address = update->address;
+	else
+		update->address = c->state.address;
 
 	spin_lock(&c->tcpr_lock);
 	tcpr_verdict = tcpr_update(&c->state.tcpr, &update->tcpr);
