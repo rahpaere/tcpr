@@ -1,64 +1,79 @@
-#include <stdio.h>
 #include <getopt.h>
+#include <stdio.h>
+#include <string.h>
 #include <xtables.h>
 
 static void tcpr_tg_help(void)
 {
-	printf("TCPR target options\n"
-	       "  --peer  Filter packets from peers.\n");
+	printf("TCPR target options:\n"
+	       "  --addr IP  handle packets from application IP\n");
 }
 
 static const struct option tcpr_tg_opts[] = {
-	{"peer", 0, NULL, 'P'},
-	{.name = NULL},
+	{"address", true, NULL, 'a'},
+	{NULL, 0, NULL, 0},
 };
+
+static void tcpr_tg_init(struct xt_entry_target *target)
+{
+	uint32_t *peer = (void *)target->data;
+	*peer = 0;
+}
 
 static int tcpr_tg_parse(int c, char **argv, int invert, unsigned int *flags, const void *entry, struct xt_entry_target **target)
 {
-	int *peer = (int *)(*target)->data;
+	uint32_t *addr = (void *)(*target)->data;
+	uint32_t *tmp;
 
 	(void)argv;
 	(void)flags;
 	(void)entry;
 
-	if (c == 'P') {
-		*peer = !invert;
-		return 1;
+	switch (c) {
+	case 'a':
+		xtables_param_act(XTF_NO_INVERT, "TCPR", "addr", invert);
+		tmp = (uint32_t *)xtables_numeric_to_ipaddr(optarg);
+		if (!tmp)
+			xtables_param_act(XTF_BAD_VALUE, "TCPR", "--addr", optarg);
+		memcpy(addr, tmp, sizeof(*tmp));
+		return true;
 	}
-	return 0;
+
+	return false;
 }
 
-static void tcpr_tg_print(const void *ip, const struct xt_entry_target *target,
+static void tcpr_tg_print(const void *entry, const struct xt_entry_target *target,
 			  int numeric)
 {
-	const int *peer = (const int *)target->data;
+	const uint32_t *addr = (const void *)target->data;
 
-	(void)ip;
+	(void)entry;
 	(void)numeric;
 
-	if (*peer)
-		printf(" TCPR --peer ");
+	if (*addr)
+		printf(" TCPR --addr %s ", xtables_ipaddr_to_numeric((struct in_addr *)addr));
 	else
 		printf(" TCPR ");
 }
 
-static void tcpr_tg_save(const void *ip, const struct xt_entry_target *target)
+static void tcpr_tg_save(const void *entry, const struct xt_entry_target *target)
 {
-	const int *peer = (const int *)target->data;
+	const uint32_t *addr = (const void *)target->data;
 
-	(void)ip;
+	(void)entry;
 
-	if (*peer)
-		printf(" --peer");
+	if (*addr)
+		printf(" --addr %s ", xtables_ipaddr_to_numeric((struct in_addr *)addr));
 }
 
 static struct xtables_target tcpr_tg_reg = {
-	.name = "TCPR",
 	.version = XTABLES_VERSION,
+	.name = "TCPR",
 	.family = AF_INET,
-	.size = XT_ALIGN(sizeof(int)),
-	.userspacesize = XT_ALIGN(sizeof(int)),
+	.size = XT_ALIGN(sizeof(uint32_t)),
+	.userspacesize = XT_ALIGN(sizeof(uint32_t)),
 	.help = tcpr_tg_help,
+	.init = tcpr_tg_init,
 	.parse = tcpr_tg_parse,
 	.print = tcpr_tg_print,
 	.save = tcpr_tg_save,
