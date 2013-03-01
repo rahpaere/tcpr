@@ -1,15 +1,14 @@
 #include <tcpr/types.h>
+#include <tcpr/util.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 
-#include "util.h"
-
 int main(int argc, char **argv)
 {
-	int bytes = 0;
 	struct tcpr_ip4 state;
+	uint32_t bytes = 0;
 	uint32_t max;
 
 	if (argc > 1)

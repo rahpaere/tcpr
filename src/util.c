@@ -1,4 +1,5 @@
 #include <tcpr/types.h>
+#include <tcpr/util.h>
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -31,15 +32,44 @@ int resolve_address(struct sockaddr_in *addr, const char *host, const char *port
         return 0;
 }
 
-int connect_to_tcpr(struct sockaddr_in *addr)
+int connect_to_tcpr(void)
 {
+	char *tmp;
+	char *host;
+	char *port;
+	struct sockaddr_in addr;
 	int s;
+	int err;
+
+	tmp = getenv("TCPR_HOST");
+	if (!tmp)
+		return -1;
+	host = strdup(tmp);
+	if (!host)
+		return -1;
+
+	tmp = getenv("TCPR_PORT");
+	if (!tmp) {
+		free(host);
+		return -1;
+	}
+	port = strdup(tmp);
+	if (!port) {
+		free(host);
+		return -1;
+	}
+
+	err = resolve_address(&addr, host, port);
+	free(host);
+	free(port);
+	if (err)
+		return -1;
 
 	s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (s < 0)
 		return -1;
 
-	if (connect(s, (struct sockaddr *)addr, sizeof(*addr)) < 0) {
+	if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		close(s);
 		return -1;
 	}

@@ -1,8 +1,7 @@
 #include <tcpr/types.h>
+#include <tcpr/util.h>
 
 #include <stdio.h>
-
-#include "util.h"
 
 int main(int argc, char **argv)
 {

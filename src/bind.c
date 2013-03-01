@@ -1,29 +1,31 @@
 #include <tcpr/types.h>
+#include <tcpr/util.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
 
-#include "util.h"
-
 int main(int argc, char **argv)
 {
+	int err;
 	struct sockaddr_in addr;
 	struct tcpr_ip4 state;
 
-	if (argc > 1) {
-		if (strchr(argv[1], 'r'))
-			done_reading = 1;
-		if (strchr(argv[1], 'w'))
-			done_writing = 1;
-	} else {
-		done = 1;
+	if (argc != 3) {
+		fprintf(stderr, "Usage: %s HOST PORT\n", argv[0]);
+		exit(EXIT_FAILURE);
+	}
+
+	err = resolve_address(&addr, argv[1], argv[2]);
+	if (err) {
+		fprintf(stderr, "%s:%s: %s\n", argv[1], argv[2],
+			gai_strerror(err));
+		exit(EXIT_FAILURE);
 	}
 
 	while (fread(&state, sizeof(state), 1, stdin)) {
-		state.tcpr.hard.done_reading = done_reading;
-		state.tcpr.hard.done_writing = done_writing;
-		state.tcpr.hard.done = done;
+		state.address = addr.sin_addr.s_addr;
+		state.tcpr.port = addr.sin_port;
 		fwrite(&state, sizeof(state), 1, stdout);
 	}
 

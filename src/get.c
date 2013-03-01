@@ -1,4 +1,5 @@
 #include <tcpr/types.h>
+#include <tcpr/util.h>
 
 #include <ctype.h>
 #include <fcntl.h>
@@ -11,8 +12,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "util.h"
-
 int main(int argc, char **argv)
 {
 	int err;
@@ -21,26 +20,31 @@ int main(int argc, char **argv)
 	struct sockaddr_in srcaddr;
 	struct tcpr_ip4 state;
 
-	if (argc != 3) {
-		fprintf(stderr, "Usage: %s HOST PORT SRCPORT\n", argv[0]);
+	if (argc != 2 && argc != 4) {
+		fprintf(stderr, "Usage: %s SRCPORT [HOST PORT]\n", argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	err = resolve_address(&addr, argv[1], argv[1]);
+	err = resolve_address(&srcaddr, NULL, argv[1]);
 	if (err) {
-		fprintf(stderr, "%s:%s: %s\n", argv[1], argv[2], gai_strerror(err));
+		fprintf(stderr, "%s: %s\n", argv[1], gai_strerror(err));
 		exit(EXIT_FAILURE);
 	}
 
-	err = resolve_address(&srcaddr, NULL, argv[3]);
-	if (err) {
-		fprintf(stderr, "%s: %s\n", argv[3], gai_strerror(err));
-		exit(EXIT_FAILURE);
+	if (argc == 4) {
+		err = resolve_address(&addr, argv[2], argv[3]);
+		if (err) {
+			fprintf(stderr, "%s:%s: %s\n", argv[2], argv[3],
+				gai_strerror(err));
+			exit(EXIT_FAILURE);
+		}
+	} else {
+		memset(&addr, 0, sizeof(addr));
 	}
 
-	s = connect_to_tcpr(&addr);
+	s = connect_to_tcpr();
 	if (s < 0) {
-		perror("Connecting");
+		fprintf(stderr, "Could not connect to TCPR.\n");
 		exit(EXIT_FAILURE);
 	}
 
