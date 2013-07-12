@@ -34,10 +34,11 @@ static int sock = -1;
 
 struct tcpr_ip4 state;
 
-static char send_buffer[16384];
-static char receive_buffer[16384];
+static char *send_buffer;
+static char *receive_buffer;
 static size_t send_buffer_size;
 static size_t receive_buffer_size;
+static size_t buffer_size;
 static int user_eof;
 static int peer_eof;
 static unsigned long send_total;
@@ -57,6 +58,7 @@ static void print_help_and_exit(const char *program)
 	fprintf(stderr, "  -b [HOST:]PORT  Bind to HOST:PORT.\n");
 	fprintf(stderr, "  -c [HOST:]PORT  Connect to HOST:PORT.\n");
 	fprintf(stderr, "  -t [HOST:]PORT  Connect to TCPR at HOST:PORT.\n");
+	fprintf(stderr, "  -B BYTES        Set socket buffer size.\n");
 	fprintf(stderr, "  -C              Bypass TCPR checkpointing.\n");
 	fprintf(stderr, "  -d              Discard input.\n");
 	fprintf(stderr, "  -g BYTES        Generate output.\n");
@@ -68,7 +70,7 @@ static void print_help_and_exit(const char *program)
 static void handle_options(int argc, char **argv)
 {
 	for (;;)
-		switch (getopt(argc, argv, "b:c:t:Cdg:v?")) {
+		switch (getopt(argc, argv, "b:c:t:B:Cdg:v?")) {
 		case 'b':
 			bind_address = optarg;
 			break;
@@ -78,6 +80,8 @@ static void handle_options(int argc, char **argv)
 		case 't':
 			tcpr_address = optarg;
 			break;
+		case 'B':
+			buffer_size = atoi(optarg);
 		case 'C':
 			checkpointing = 0;
 			break;
@@ -108,6 +112,21 @@ static void setup_connection(void)
 	socklen_t addrlen;
 	struct addrinfo *ai;
 	struct addrinfo hints;
+
+	if (!buffer_size)
+		buffer_size = 16384;
+
+	send_buffer = malloc(buffer_size);
+	if (!send_buffer) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
+	receive_buffer = malloc(buffer_size);
+	if (!receive_buffer) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
 
 	s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (s < 0) {
@@ -162,6 +181,12 @@ static void setup_connection(void)
 
 			addrlen = sizeof(sockname);
 			getsockname(s, (struct sockaddr *)&sockname, &addrlen);
+
+			if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size)) < 0)
+				perror("Setting SO_RCVBUF");
+			if (setsockopt(s, SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size)) < 0)
+				perror("Setting SO_SNDBUF");
+
 			sock = s;
 			return;
 		}
@@ -194,6 +219,11 @@ static void setup_connection(void)
 
 	addrlen = sizeof(sockname);
 	getsockname(s, (struct sockaddr *)&sockname, &addrlen);
+
+	if (setsockopt(s, SOL_SOCKET, SO_RCVBUF, &buffer_size, sizeof(buffer_size)) < 0)
+		perror("Setting SO_RCVBUF");
+	if (setsockopt(s, SOL_SOCKET, SO_SNDBUF, &buffer_size, sizeof(buffer_size)) < 0)
+		perror("Setting SO_SNDBUF");
 
 	sock = s;
 }
@@ -284,9 +314,9 @@ static void handle_events(void)
 					|| generate > send_total) {
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);
-		if (!peer_eof && receive_buffer_size < sizeof(receive_buffer))
+		if (!peer_eof && receive_buffer_size < buffer_size)
 			FD_SET(sock, &rfds);
-		if (!user_eof && send_buffer_size < sizeof(send_buffer))
+		if (!user_eof && send_buffer_size < buffer_size)
 			FD_SET(0, &rfds);
 		if (receive_buffer_size > 0)
 			FD_SET(1, &wfds);
@@ -298,9 +328,7 @@ static void handle_events(void)
 		}
 
 		if (FD_ISSET(sock, &rfds)) {
-			n = read(sock, &receive_buffer[receive_buffer_size],
-					sizeof(receive_buffer)
-						- receive_buffer_size);
+			n = read(sock, &receive_buffer[receive_buffer_size], buffer_size - receive_buffer_size);
 			if (n > 0) {
 				if (checkpointing) {
 					state.tcpr.hard.ack = htonl(ntohl(state.tcpr.hard.ack) + n);
@@ -326,7 +354,7 @@ static void handle_events(void)
 
 		if (FD_ISSET(sock, &wfds)) {
 			if (generate) {
-				n = write(sock, send_buffer, generate < sizeof(send_buffer) ? generate : sizeof(send_buffer));
+				n = write(sock, send_buffer, buffer_size);
 				if (n < 0) {
 					perror("Writing to peer");
 					exit(EXIT_FAILURE);
@@ -357,8 +385,7 @@ static void handle_events(void)
 		}
 
 		if (FD_ISSET(0, &rfds)) {
-			n = read(0, &send_buffer[send_buffer_size],
-					sizeof(send_buffer) - send_buffer_size);
+			n = read(0, &send_buffer[send_buffer_size], buffer_size - send_buffer_size);
 			if (n > 0) {
 				send_buffer_size += n;
 			} else if (n < 0) {
