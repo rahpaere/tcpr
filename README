@@ -24,6 +24,13 @@ The kernel module must be built separately, using the kernel build system.
   $ make
   # make install
 
+I usually find it is necessary to run depmod manually.
+
+  # depmod
+
+You can check whether the kernel module is successfully built from the
+output of `modinfo tcpr'.
+
 Once the module is installed, load it into the kernel.
 
   # modprobe tcpr
