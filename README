@@ -4,9 +4,14 @@ repository, and TCPR's design and ongoing research.  This document aims
 to guide someone new to the project from first cloning the code repository
 through conducting a live demonstration and developing new applications.
 
-TCPR uses the GNU autotools build system.  However, the repository does
-not contain any generated files, so once, right after cloning, you must
-set up some infrastructure:
+TCPR uses the GNU autotools build system and links with the xtables
+library.  On an Ubuntu system, the `autoconf', `libtool', and
+`iptables-dev' packages provide the necessary dependencies.
+
+  # apt-get install autoconf libtool iptables-dev
+
+The repository does not contain any autotools generated files, so once,
+right after cloning, you must set up some infrastructure.
 
   $ autoreconf -i
 

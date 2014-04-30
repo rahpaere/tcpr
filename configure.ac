@@ -9,6 +9,7 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_PROG_CC
 AC_PROG_LIBTOOL
 AM_PROG_CC_C_O
+AM_PROG_AR
 
 AC_SEARCH_LIBS([xtables_register_target], [xtables], [], [
   AC_MSG_ERROR([the xtables library is required])])
