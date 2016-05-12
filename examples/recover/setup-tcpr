@@ -1,6 +1,6 @@
 #! /bin/sh
 
 modprobe tcpr
-iptables -t mangle -A FORWARD -m physdev --physdev-in application -p tcp -j TCPR
-iptables -t mangle -A FORWARD -m physdev --physdev-in application -p udp -j TCPR
-iptables -t mangle -A FORWARD -m physdev --physdev-out application -p tcp -j TCPR --peer
+iptables -t mangle -A FORWARD -m physdev --physdev-is-bridged --physdev-in application -p tcp -j TCPR --addr 192.0.2.1
+iptables -t mangle -A FORWARD -m physdev --physdev-is-bridged --physdev-in application -p udp -j TCPR --addr 192.0.2.1
+iptables -t mangle -A FORWARD -m physdev --physdev-is-bridged --physdev-out application -p tcp -j TCPR

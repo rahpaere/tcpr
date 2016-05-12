@@ -9,13 +9,21 @@ ip link set application master tcpr
 ip link set peer master tcpr
 ip link set applicationeth netns application name eth0
 ip link set peereth netns peer name eth0
-ip address add 10.0.0.3/24 dev tcpr
-ip netns exec application ip address add 10.0.0.1/24 dev eth0
+ip address add 192.0.2.3/24 dev tcpr
+ip netns exec application ip address add 192.0.2.1/24 dev eth0
 ip netns exec application ip link set eth0 up
 ip netns exec application ip link set lo up
-ip netns exec peer ip address add 10.0.0.2/24 dev eth0
+ip netns exec peer ip address add 192.0.2.2/24 dev eth0
 ip netns exec peer ip link set eth0 up
 ip netns exec peer ip link set lo up
 ip link set application up
 ip link set peer up
 ip link set tcpr up
+echo 1 > /proc/sys/net/ipv4/ip_forward
+echo 1 > /proc/sys/net/ipv4/conf/application/proxy_arp
+echo 1 > /proc/sys/net/ipv4/conf/peer/proxy_arp
+echo 1 > /proc/sys/net/ipv4/conf/tcpr/proxy_arp
+echo 1 | ip netns exec application tee /proc/sys/net/ipv4/conf/eth0/proxy_arp > /dev/null
+echo 1 | ip netns exec peer tee /proc/sys/net/ipv4/conf/eth0/proxy_arp > /dev/null
+ip netns exec application ethtool -K eth0 rx off tx off >/dev/null
+ip netns exec peer ethtool -K eth0 rx off tx off >/dev/null

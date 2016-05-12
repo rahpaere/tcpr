@@ -20,6 +20,7 @@ static char *bind_address;
 static char *connect_address;
 
 static struct sockaddr_in sockname;
+
 static struct sockaddr_in peername;
 
 static int discard;
@@ -171,6 +172,18 @@ static void setup_connection(void)
 				perror("Listening");
 				exit(EXIT_FAILURE);
 			}
+
+			if (tcpr_sock != -1) {
+				addrlen = sizeof(sockname);
+				getsockname(s, (struct sockaddr *)&sockname, &addrlen);
+				state.address = sockname.sin_addr.s_addr;
+				state.peer_address = 0;
+				state.tcpr.port = sockname.sin_port;
+				state.tcpr.hard.port = sockname.sin_port;
+				state.tcpr.hard.peer.port = 0;
+				send(tcpr_sock, &state, sizeof(state), 0);
+			}
+
 			listen_sock = s;
 			addrlen = sizeof(peername);
 			s = accept(listen_sock, (struct sockaddr *)&peername, &addrlen);
@@ -274,7 +287,10 @@ static void setup_tcpr(void)
 	}
 
 	tcpr_sock = s;
+}
 
+static void setup_state(void)
+{
 	state.address = sockname.sin_addr.s_addr;
 	state.peer_address = peername.sin_addr.s_addr;
 	state.tcpr.hard.port = sockname.sin_port;
@@ -441,8 +457,9 @@ static void teardown(void)
 int main(int argc, char **argv)
 {
 	handle_options(argc, argv);
-	setup_connection();
 	setup_tcpr();
+	setup_connection();
+	setup_state();
 	handle_events();
 	teardown();
 	return EXIT_SUCCESS;

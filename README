@@ -24,40 +24,33 @@ Then, you can build the userspace programs and iptables extension library.
   # make install
 
 The kernel module must be built separately, using the kernel build system.
+I usually find it is necessary to run depmod manually.
 
   $ cd module
   $ make
   # make install
-
-I usually find it is necessary to run depmod manually.
-
   # depmod
 
 You can check whether the kernel module is successfully built from the
 output of `modinfo tcpr'.
 
-Once the module is installed, load it into the kernel.
-
-  # modprobe tcpr
-
 The scripts in the `examples' directory provide a simple demonstration
-of TCPR.  Start with `examplesrecovery, which demonstrate simple failure
-and recovery.  First, inspect the setup scripts, then set up the network
-and TCPR to prove some infrastructure for running the example application
-and peer in their own lightweight virtual network, with the host acting
-as ethernet bridge and filtering all TCP traffic through TCPR.  Then,
-in one terminal run the `application' script, and in another run the
-`peer'.  Type messages to chat back and forth.  Kill the application
-with control-c, and recover it with the `recover' script.  Finally,
-end the connection gracefully with control-d at each endpoint, and tear
-down the network and TCPR to release the infrastructure.  The scripts
-and the source code for the `tcpr-chat' program constitute a working
-guide to setting up and using TCPR.
+of TCPR.  Start with `examples/recovery', which demonstrates simple
+failure and recovery.  First, inspect the scripts to get a feel for what
+is about to happen, then open up two terminals.
 
-Later, explore `examples/migrate', which demonstrate live migration
-based on an OpenFlow switch to migrate the underlying IP channel.
-You must have Open vSwitch installed.  As in the recover scripts, start
-with `application' and `peer' in separate terminals.  Then, in a third
-terminal, run `migrate 1 2' to take over the application on a second
-replica.  Go back to the first and run `migrate 2 1' to bring it back.
-End the connection as before.
+  # ./setup-network
+  # ./setup-tcpr
+  				# ./peer
+  # ./application
+
+	... type back and forth ...
+  ^C
+
+  # ./recover
+
+	... more typing ...
+  ^D				^D
+
+  # ./teardown-tcpr
+  # ./teardown-network

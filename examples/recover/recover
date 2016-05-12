@@ -1,2 +1,2 @@
 #! /bin/sh
-ip netns exec application tcpr-chat -b 10.0.0.1:8888 -c 10.0.0.2:9999 -t 10.0.0.2:7777 -v
+ip netns exec application tcpr-chat -b 192.0.2.1:8888 -c 192.0.2.2:9999 -t 192.0.2.2:7777 -v

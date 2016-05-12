@@ -99,6 +99,8 @@ static struct connection *connection_create(uint32_t peer_address,
 	c = kmalloc(sizeof(*c), GFP_ATOMIC);
 	if (!c) {
 		write_unlock(&connections_lock);
+		if (net_ratelimit())
+			printk(KERN_WARNING "TCPR cannot allocate new connection\n");
 		return NULL;
 	}
 
@@ -133,7 +135,7 @@ static void inject_ip(struct iphdr *ip, struct sk_buff *oldskb)
 	skb = alloc_skb(LL_MAX_HEADER + ntohs(ip->tot_len), GFP_ATOMIC);
 	if (skb == NULL) {
 		if (net_ratelimit())
-			printk(KERN_DEBUG "TCPR cannot allocate SKB\n");
+			printk(KERN_WARNING "TCPR cannot allocate SKB\n");
 		return;
 	}
 	
@@ -145,13 +147,13 @@ static void inject_ip(struct iphdr *ip, struct sk_buff *oldskb)
 	skb_dst_set(skb, dst_clone(skb_dst(oldskb)));
 	if (ip_route_me_harder(skb, RTN_UNSPEC) < 0) {
 		if (net_ratelimit())
-			printk(KERN_DEBUG "TCPR cannot route\n");
+			printk(KERN_WARNING "TCPR cannot route\n");
 		kfree_skb(skb);
 		return;
 	}
 	if (skb->len > dst_mtu(skb_dst(skb))) {
 		if (net_ratelimit())
-			printk(KERN_DEBUG "TCPR generated packet that would fragment\n");
+			printk(KERN_WARNING "TCPR generated packet that would fragment\n");
 		kfree_skb(skb);
 		return;
 	}
@@ -175,12 +177,16 @@ static void inject_tcp(struct connection *c, enum tcpr_verdict tcpr_verdict, str
 
 	switch (tcpr_verdict) {
 	case TCPR_RESET:
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR abort application\n");
 		tcpr_reset(&packet.tcp, &c->state.tcpr);
 		packet.ip.saddr = c->state.peer_address;
 		packet.ip.daddr = c->state.address;
 		break;
 
 	case TCPR_RECOVER:
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR recover application\n");
 		tcpr_recover(&packet.tcp, &c->state.tcpr);
 		packet.ip.saddr = c->state.peer_address;
 		packet.ip.daddr = c->state.address;
@@ -250,7 +256,8 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, uint32_t address, struct
 			inject_update(ip, udp, update, skb);
 			return NF_DROP;
 		}
-		printk(KERN_INFO "TCPR new connection from update"); /* XXX */
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR new connection from update\n");
 		c = connection_create(update->peer_address,
 				      update->tcpr.hard.peer.port,
 				      address,
@@ -265,7 +272,8 @@ static unsigned int tcpr_tg_update(struct sk_buff *skb, uint32_t address, struct
 	spin_lock(&c->tcpr_lock);
 	if (update->address) {
 		if (c->state.address != update->address)
-			printk(KERN_INFO "TCPR updated soft address"); /* XXX */
+			if (net_ratelimit())
+				printk(KERN_INFO "TCPR updated soft address\n");
 		c->state.address = update->address;
 	} else
 		update->address = c->state.address;
@@ -301,9 +309,13 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb, uint32_t address, s
 	c = lookup_internal(ip->daddr, tcp->dest, ip->saddr, tcp->source, net_ns);
 	read_unlock(&connections_lock);
 	if (!c) {
-		if (tcp->ack)
+		if (tcp->ack) {
+			if (net_ratelimit())
+				printk(KERN_INFO "TCPR cannot ACK nonexistent connection\n");
 			return NF_DROP;
-		printk(KERN_INFO "TCPR new connection from application"); /* XXX */
+		}
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR new connection from application\n");
 		c = connection_create(ip->daddr, tcp->dest,
 				      address, tcp->source,
 				      ip->saddr, tcp->source, net_ns);
@@ -320,8 +332,11 @@ static unsigned int tcpr_tg_application(struct sk_buff *skb, uint32_t address, s
 	} else if (tcpr_verdict != TCPR_DROP) {
 		inject_tcp(c, tcpr_verdict, skb);
 	}
-	if (c->state.tcpr.done)
+	if (c->state.tcpr.done) {
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR connection done\n");
 		connection_done(c);
+	}
 	spin_unlock(&c->tcpr_lock); /* XXX race */
 	return verdict;
 }
@@ -344,16 +359,23 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb, struct net *net_ns)
 	c = lookup_external(ip->saddr, tcp->source, ip->daddr, tcp->dest, net_ns);
 	read_unlock(&connections_lock);
 	if (!c) {
-		if (tcp->ack)
+		if (tcp->ack) {
+			if (net_ratelimit())
+				printk(KERN_INFO "TCPR cannot ACK nonexistent connection\n");
 			return NF_DROP;
+		}
 
 		read_lock(&connections_lock);
 		p = lookup_external(0, 0, ip->daddr, tcp->dest, net_ns);
 		read_unlock(&connections_lock);
-		if (!p)
+		if (!p) {
+			if (net_ratelimit())
+				printk(KERN_INFO "TCPR new connection from peer rejected\n");
 			return NF_DROP;
+		}
 
-		printk(KERN_INFO "TCPR new connection from peer"); /* XXX */
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR new connection from peer\n");
 		c = connection_create(ip->saddr, tcp->source,
 				      ip->daddr, tcp->dest,
 				      p->state.address, p->state.tcpr.port,
@@ -371,8 +393,11 @@ static unsigned int tcpr_tg_peer(struct sk_buff *skb, struct net *net_ns)
 	} else if (tcpr_verdict != TCPR_DROP) {
 		inject_tcp(c, tcpr_verdict, skb);
 	}
-	if (c->state.tcpr.done)
+	if (c->state.tcpr.done) {
+		if (net_ratelimit())
+			printk(KERN_INFO "TCPR connection done\n");
 		connection_done(c);
+	}
 	spin_unlock(&c->tcpr_lock); /* XXX race */
 	return verdict;
 }
